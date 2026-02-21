@@ -19,7 +19,7 @@ jobs:
 
       - name: Clone distingNT_API
         run: |
-          git clone --depth 1 https://github.com/expertsleepersltd/distingNT_API.git
+          git clone --depth 1 --branch v1.14.0 https://github.com/expertsleepersltd/distingNT_API.git
 
       - name: Build plugin
         run: |
