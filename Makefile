@@ -1,8 +1,8 @@
 # Minimal Makefile for a single-file disting NT plugin
 
-PROJECT = cessna_awg
+PROJECT = cessna
 DISTINGNT_API ?= distingNT_API
-SRC = Cessna_AWG.cpp
+SRC = Cessna.cpp
 
 CXX = arm-none-eabi-g++
 CXXFLAGS = -std=c++11 -Wall -Wextra -fno-rtti -fno-exceptions \
