@@ -1,32 +1,33 @@
-# Minimal Makefile for a single-file disting NT plugin
+name: Build Disting NT Plugin
 
-PROJECT = cessna
-DISTINGNT_API ?= distingNT_API
-SRC = Cessna.cpp
+on:
+  push:
+  workflow_dispatch:
 
-CXX = arm-none-eabi-g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -fno-rtti -fno-exceptions \
-  -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard \
-  -O3 -ffast-math -funroll-loops -fdata-sections -ffunction-sections \
-  -I$(DISTINGNT_API)/include
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-BUILD_DIR = build
-OUT_DIR = plugins
+    steps:
+      - name: Checkout your repo
+        uses: actions/checkout@v4
 
-all: $(OUT_DIR)/$(PROJECT).o
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi make
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+      - name: Clone distingNT_API
+        run: |
+          git clone --depth 1 https://github.com/expertsleepersltd/distingNT_API.git
 
-$(OUT_DIR):
-	mkdir -p $(OUT_DIR)
+      - name: Build plugin
+        run: |
+          make DISTINGNT_API=$PWD/distingNT_API
 
-$(BUILD_DIR)/$(PROJECT).o: $(SRC) | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -c $(SRC) -o $@
-
-# Pack as a relocatable .o (what the NT expects)
-$(OUT_DIR)/$(PROJECT).o: $(BUILD_DIR)/$(PROJECT).o | $(OUT_DIR)
-	$(CXX) -r $(BUILD_DIR)/$(PROJECT).o -o $@
-
-clean:
-	rm -rf $(BUILD_DIR) $(OUT_DIR)
+      - name: Upload plugin .o
+        uses: actions/upload-artifact@v4
+        with:
+          name: distingnt-plugin
+          path: |
+            plugins/*.o
