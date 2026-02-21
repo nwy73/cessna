@@ -22,12 +22,12 @@ jobs:
           git clone --depth 1 https://github.com/expertsleepersltd/distingNT_API.git
 
       - name: Build plugin
-  run: |
-    make DISTINGNT_API=$PWD/distingNT_API
+        run: |
+          make DISTINGNT_API=$PWD/distingNT_API
 
-      - name: Upload .o file
+      - name: Upload plugin .o
         uses: actions/upload-artifact@v4
         with:
           name: distingnt-plugin
           path: |
-            *.o
+            plugins/*.o
