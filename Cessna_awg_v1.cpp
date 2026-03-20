@@ -1,0 +1,702 @@
+/*
+ * Cessna AWG (v1) — CV-driven Arbitrary Waveform Generator
+ * ---------------------------------------------------------
+ * A faithful recreation of James Cessna's 1970 AWG design:
+ * a wavetable oscillator driven by a 1V/oct pitch CV input,
+ * with 16 manually programmable amplitude bins defining the
+ * waveform shape. 0V = C4 (261.63 Hz).
+ *
+ * Extensions beyond the original:
+ * - Smoothing: linear <-> cubic Hermite interpolation blend
+ * - Modulation: Ripple, Sequencer, and Drunk modes for
+ *   animating the bin values in real time
+ * - Depth: scales overall output amplitude
+ */
+
+#include <math.h>
+#include <string.h>
+#include <new>
+#include <distingnt/api.h>
+
+#ifndef M_PI_F
+#define M_PI_F 3.14159265358979323846f
+#endif
+
+extern "C" int* __errno(void) {
+    static int errno_val = 0;
+    return &errno_val;
+}
+
+// ----------------------------
+// Constants
+// ----------------------------
+static constexpr int   kBins              = 16;
+static constexpr int   kDisplayPoints     = 128;
+static constexpr float kDefaultSampleRate = 48000.0f;
+static constexpr float kC4Hz             = 261.63f;   // 0V = C4
+
+// ----------------------------
+// Helpers
+// ----------------------------
+static inline float clampf(float x, float lo, float hi) {
+    return (x < lo) ? lo : (x > hi) ? hi : x;
+}
+static inline float lerpf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+// LCG random number generator (same as v39)
+static inline float lcgRand(uint32_t &state) {
+    state = state * 1664525u + 1013904223u;
+    return ((float)(state >> 1) / (float)0x7fffffff) - 1.0f; // -1..1
+}
+
+// ----------------------------
+// Forward declarations
+// ----------------------------
+static inline float evalLinear(const float *bins, float phase01);
+static void seqBuildPattern(struct _CessnaAwg_DTC *d);
+static void computeModX(struct _CessnaAwg_DTC *d);
+
+// ----------------------------
+// Cubic Hermite interpolator
+// ----------------------------
+struct PeriodicHermite16 {
+    float m[kBins] = {0};
+
+    void computeSlopes(const float *p) {
+        float d[kBins];
+        for (int i=0;i<kBins;i++) {
+            float p0 = p[i];
+            float p1 = p[(i+1)&15];
+            d[i] = (p1 - p0);
+        }
+        for (int i=0;i<kBins;i++) {
+            float dm = d[(i-1)&15];
+            float dp = d[i];
+            m[i] = 0.5f * (dm + dp);
+        }
+        for (int i=0;i<kBins;i++) {
+            float dp = d[i];
+            if (dp == 0.0f) { m[i] = 0.0f; m[(i+1)&15] = 0.0f; continue; }
+            if ((m[i] / dp) < 0.0f)        m[i]        = 0.0f;
+            if ((m[(i+1)&15] / dp) < 0.0f) m[(i+1)&15] = 0.0f;
+        }
+        for (int i=0;i<kBins;i++) {
+            float dp = d[i];
+            if (dp == 0.0f) continue;
+            float r1 = m[i] / dp;
+            float r2 = m[(i+1)&15] / dp;
+            float sumsq = r1*r1 + r2*r2;
+            if (sumsq > 9.0f) {
+                float t = 3.0f / sqrtf(sumsq);
+                m[i]        *= t;
+                m[(i+1)&15] *= t;
+            }
+        }
+    }
+
+    inline float eval(const float *p, float phase01) const {
+        float x = phase01 * (float)kBins;
+        int i = (int)floorf(x);
+        float t = x - (float)i;
+        i &= 15;
+        int i1 = (i+1) & 15;
+        float p0 = p[i], p1 = p[i1];
+        float m0 = m[i], m1 = m[i1];
+        float t2 = t*t, t3 = t2*t;
+        float h00 =  2.0f*t3 - 3.0f*t2 + 1.0f;
+        float h10 =        t3 - 2.0f*t2 + t;
+        float h01 = -2.0f*t3 + 3.0f*t2;
+        float h11 =        t3 -       t2;
+        return h00*p0 + h10*m0 + h01*p1 + h11*m1;
+    }
+};
+
+// ----------------------------
+// DTC (fast memory)
+// ----------------------------
+struct _CessnaAwg_DTC {
+    float sampleRate;
+
+    // Waveform bins — direct amplitude values, ±5V
+    float B[kBins];     // base bin values (from user parameters)
+    float S[kBins];     // combined: B[i] + modX[i], used for output
+
+    float depthD;       // 0..1 output amplitude scale
+    float curve;        // 0..1 linear→hermite blend
+
+    float phase;
+    float phaseInc;
+    float phaseIncTarget;
+    float slewCoeff;
+
+    PeriodicHermite16 herm;
+
+    // --- Modulation state ---
+    int   modMode;          // 0=Off 1=Ripple 2=Sequencer 3=Drunk
+    float modAmt;
+    float rippleRate;
+    float lfoPhase;
+    float lfoPhaseInc;
+
+    int   seqSpeed;
+    float seqSmooth;
+    float seqDrift;
+    int   seqPattern;
+    float seqTarget[kBins];
+    float seqCurrent[kBins];
+    int   seqCycleCount;
+    uint32_t seqRng;
+
+    float drunkWander;
+    float drunkValues[kBins];
+    uint32_t drunkRng;
+
+    float modX[kBins];      // modulation contribution, ±1 (scaled by modAmt)
+
+    // Display
+    float dispWave[kDisplayPoints];
+
+    // Grayout / UI
+    bool  needsGrayOutUpdate;
+    int   algorithmIdx;
+
+    _CessnaAwg_DTC() {
+        sampleRate = kDefaultSampleRate;
+
+        depthD = 1.0f;
+        curve  = 0.0f;
+
+        phase          = 0.0f;
+        phaseInc       = kC4Hz / kDefaultSampleRate;
+        phaseIncTarget = phaseInc;
+        slewCoeff      = 0.0f;
+
+        modMode     = 0;
+        modAmt      = 0.5f;
+        rippleRate  = 0.1f;
+        lfoPhase    = 0.0f;
+        lfoPhaseInc = rippleRate / kDefaultSampleRate;
+
+        seqSpeed      = 4;
+        seqSmooth     = 0.5f;
+        seqDrift      = 0.2f;
+        seqPattern    = 0;
+        seqCycleCount = 0;
+        seqRng        = 0x12345678u;
+
+        drunkWander = 0.05f;
+        drunkRng    = 0x87654321u;
+
+        for (int i=0;i<kBins;i++) {
+            B[i]           = 0.0f;   // silence default
+            S[i]           = 0.0f;
+            seqTarget[i]   = 0.0f;
+            seqCurrent[i]  = 0.0f;
+            drunkValues[i] = 0.0f;
+            modX[i]        = 0.0f;
+        }
+
+        for (int i=0;i<kDisplayPoints;i++) dispWave[i] = 0.0f;
+
+        needsGrayOutUpdate = true;
+        algorithmIdx = -1;
+    }
+};
+
+// ----------------------------
+// Plugin struct
+// ----------------------------
+struct _CessnaAwg : public _NT_algorithm {
+    _CessnaAwg_DTC *dtc;
+    int32_t v[1]; // parameter values — sized by NT
+};
+
+// ----------------------------
+// Parameter enum
+// ----------------------------
+enum {
+    kParamCVIn = 0,
+    kParamOut1, kParamOut1Mode,
+
+    kParamDepth,
+    kParamCurve,
+
+    // Bins (waveform page)
+    kParamB1,
+    kParamB16 = kParamB1 + 15,
+
+    // Mod page
+    kParamModMode,
+    kParamModAmt,
+    kParamRippleRate,
+    kParamSeqSpeed,
+    kParamSeqSmooth,
+    kParamSeqDrift,
+    kParamSeqPattern,
+    kParamDrunkWander,
+};
+static constexpr int kNumParams = kParamDrunkWander + 1;
+
+// ----------------------------
+// String tables
+// ----------------------------
+static const char* onOffStrings[]   = {"Off", "On", nullptr};
+static const char* modModeStrings[] = {"Off", "Ripple", "Sequencer", "Drunk", nullptr};
+static const char* seqPatStrings[]  = {"Ramp", "Triangle", "Random", "Alternating", nullptr};
+
+// ----------------------------
+// Parameter descriptors
+// ----------------------------
+static const _NT_parameter g_parameters[kNumParams] = {
+    NT_PARAMETER_CV_INPUT("CV in", 0, 1)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("out", 0, 13)
+
+    { .name="Depth",    .min=0,  .max=100, .def=100, .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Smoothing",.min=0,  .max=100, .def=0,   .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+
+    // Bins 1–16: amplitude ±100% = ±5V
+    { .name="Bin 1",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 2",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 3",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 4",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 5",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 6",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 7",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 8",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 9",  .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 10", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 11", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 12", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 13", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 14", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 15", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Bin 16", .min=-100,.max=100,.def=0,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+
+    // Mod page
+    { .name="Mod Mode",    .min=0,.max=3,   .def=0,  .unit=kNT_unitEnum,    .scaling=kNT_scalingNone, .enumStrings=modModeStrings },
+    { .name="Mod Amt",     .min=0,.max=100, .def=50, .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Ripple Rate", .min=1,.max=1000,.def=10, .unit=kNT_unitNone,    .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Seq Rate",    .min=1,.max=32,  .def=29, .unit=kNT_unitNone,    .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Seq Smooth",  .min=0,.max=100, .def=50, .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Seq Drift",   .min=0,.max=100, .def=20, .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+    { .name="Seq Pattern", .min=0,.max=3,   .def=0,  .unit=kNT_unitEnum,    .scaling=kNT_scalingNone, .enumStrings=seqPatStrings },
+    { .name="Wander",      .min=0,.max=100, .def=20, .unit=kNT_unitPercent, .scaling=kNT_scalingNone, .enumStrings=nullptr },
+};
+
+// ----------------------------
+// Page index arrays
+// ----------------------------
+static const uint8_t g_pageRoutingIdx[] = {
+    (uint8_t)kParamCVIn,
+    (uint8_t)kParamOut1, (uint8_t)kParamOut1Mode,
+};
+
+static const uint8_t g_pageMainIdx[] = {
+    (uint8_t)kParamDepth,
+    (uint8_t)kParamCurve,
+};
+
+static const uint8_t g_pageBinsIdx[] = {
+    (uint8_t)kParamB1,      (uint8_t)(kParamB1+1),  (uint8_t)(kParamB1+2),  (uint8_t)(kParamB1+3),
+    (uint8_t)(kParamB1+4),  (uint8_t)(kParamB1+5),  (uint8_t)(kParamB1+6),  (uint8_t)(kParamB1+7),
+    (uint8_t)(kParamB1+8),  (uint8_t)(kParamB1+9),  (uint8_t)(kParamB1+10), (uint8_t)(kParamB1+11),
+    (uint8_t)(kParamB1+12), (uint8_t)(kParamB1+13), (uint8_t)(kParamB1+14), (uint8_t)(kParamB1+15),
+};
+
+static const uint8_t g_pageModIdx[] = {
+    (uint8_t)kParamModMode,
+    (uint8_t)kParamModAmt,
+    (uint8_t)kParamRippleRate,
+    (uint8_t)kParamSeqSpeed,
+    (uint8_t)kParamSeqSmooth,
+    (uint8_t)kParamSeqDrift,
+    (uint8_t)kParamSeqPattern,
+    (uint8_t)kParamDrunkWander,
+};
+
+static const _NT_parameterPage g_pages_arr[] = {
+    { .name="Routing", .numParams=(uint8_t)ARRAY_SIZE(g_pageRoutingIdx), .group=0, .unused={0,0}, .params=g_pageRoutingIdx },
+    { .name="Main",    .numParams=(uint8_t)ARRAY_SIZE(g_pageMainIdx),    .group=0, .unused={0,0}, .params=g_pageMainIdx },
+    { .name="Waveform",.numParams=(uint8_t)ARRAY_SIZE(g_pageBinsIdx),    .group=1, .unused={0,0}, .params=g_pageBinsIdx },
+    { .name="Mod",     .numParams=(uint8_t)ARRAY_SIZE(g_pageModIdx),     .group=0, .unused={0,0}, .params=g_pageModIdx },
+};
+
+static const _NT_parameterPages g_pages = {
+    .numPages = ARRAY_SIZE(g_pages_arr),
+    .pages    = g_pages_arr,
+};
+
+// ----------------------------
+// Helper: get parameter as 0..1
+// ----------------------------
+#define getPct01(p)      ((float)self->v[(p)] * 0.01f)
+#define getPctSigned(p)  ((float)self->v[(p)] * 0.01f * 5.0f)  // ±100% → ±5V
+
+// ----------------------------
+// Linear wavetable evaluation
+// ----------------------------
+static inline float evalLinear(const float *bins, float phase01) {
+    float x  = phase01 * (float)kBins;
+    int   i  = (int)floorf(x) & 15;
+    float t  = x - floorf(x);
+    return lerpf(bins[i], bins[(i+1)&15], t);
+}
+
+// ----------------------------
+// combineS: merge B[] + modX[] into S[]
+// ----------------------------
+static void combineS(struct _CessnaAwg_DTC *d) {
+    float D = d->depthD;
+    for (int i=0;i<kBins;i++) {
+        // B[i] is in ±5V, modX[i] is ±1 scaled by modAmt
+        float v = D * clampf(d->B[i] + d->modX[i] * 5.0f, -5.0f, 5.0f);
+        d->S[i] = clampf(v, -5.0f, 5.0f);
+    }
+}
+
+// ----------------------------
+// Modulation
+// ----------------------------
+static void seqBuildPattern(struct _CessnaAwg_DTC *d) {
+    switch (d->seqPattern) {
+        case 0: // Ramp
+            for (int i=0;i<kBins;i++)
+                d->seqTarget[i] = ((float)i / (float)(kBins-1)) * 2.0f - 1.0f;
+            break;
+        case 1: { // Triangle
+            for (int i=0;i<kBins;i++) {
+                float t = (float)i / (float)kBins;
+                d->seqTarget[i] = (t < 0.5f) ? (t*4.0f - 1.0f) : (3.0f - t*4.0f);
+            }
+            break;
+        }
+        case 2: // Random
+            for (int i=0;i<kBins;i++)
+                d->seqTarget[i] = clampf(d->seqTarget[i] + lcgRand(d->seqRng) * d->seqDrift, -1.0f, 1.0f);
+            break;
+        case 3: // Alternating
+            for (int i=0;i<kBins;i++)
+                d->seqTarget[i] = (i & 1) ? -1.0f : 1.0f;
+            break;
+    }
+    if (d->seqPattern != 2 && d->seqDrift > 0.0f) {
+        for (int i=0;i<kBins;i++)
+            d->seqTarget[i] = clampf(d->seqTarget[i] + lcgRand(d->seqRng) * d->seqDrift, -1.0f, 1.0f);
+    }
+}
+
+static void seqRotate(struct _CessnaAwg_DTC *d) {
+    float tmp = d->seqTarget[kBins-1];
+    for (int i=kBins-1;i>0;i--) d->seqTarget[i] = d->seqTarget[i-1];
+    d->seqTarget[0] = tmp;
+}
+
+static void seqAdvance(struct _CessnaAwg_DTC *d) {
+    d->seqCycleCount++;
+    if (d->seqCycleCount < d->seqSpeed) return;
+    d->seqCycleCount = 0;
+    if (d->seqPattern == 2) {
+        seqBuildPattern(d);
+    } else {
+        seqRotate(d);
+        if (d->seqDrift > 0.0f) {
+            for (int i=0;i<kBins;i++)
+                d->seqTarget[i] = clampf(d->seqTarget[i] + lcgRand(d->seqRng) * d->seqDrift, -1.0f, 1.0f);
+        }
+    }
+}
+
+static void drunkAdvance(struct _CessnaAwg_DTC *d) {
+    if (d->drunkWander < 0.001f) {
+        for (int i=0;i<kBins;i++) d->drunkValues[i] *= 0.9f;
+        return;
+    }
+    for (int i=0;i<kBins;i++) {
+        float step = lcgRand(d->drunkRng) * d->drunkWander;
+        d->drunkValues[i] = clampf(d->drunkValues[i] + step, -1.0f, 1.0f);
+    }
+}
+
+static void computeModX(struct _CessnaAwg_DTC *d) {
+    switch (d->modMode) {
+        case 0: // Off
+            for (int i=0;i<kBins;i++) d->modX[i] = 0.0f;
+            break;
+        case 1: { // Ripple
+            d->lfoPhase += d->lfoPhaseInc;
+            if (d->lfoPhase >= 1.0f) d->lfoPhase -= 1.0f;
+            for (int i=0;i<kBins;i++) {
+                float binPhase = d->lfoPhase + (float)i / (float)kBins;
+                if (binPhase >= 1.0f) binPhase -= 1.0f;
+                d->modX[i] = d->modAmt * sinf(2.0f * M_PI_F * binPhase);
+            }
+            break;
+        }
+        case 2: { // Sequencer
+            float slew = 1.0f - d->seqSmooth * 0.999f;
+            for (int i=0;i<kBins;i++) {
+                d->seqCurrent[i] += slew * (d->seqTarget[i] - d->seqCurrent[i]);
+                d->modX[i] = d->modAmt * d->seqCurrent[i];
+            }
+            break;
+        }
+        case 3: // Drunk
+            for (int i=0;i<kBins;i++)
+                d->modX[i] = d->modAmt * d->drunkValues[i];
+            break;
+    }
+}
+
+// ----------------------------
+// Grayout
+// ----------------------------
+static void updateModGrayOut(_NT_algorithm* base, int modeOverride = -1) {
+    auto *self = (_CessnaAwg*)base;
+    if (!self || !self->v) return;
+    auto *d = self->dtc;
+    if (!d) return;
+
+    if (d->algorithmIdx < 0) {
+        d->needsGrayOutUpdate = true;
+        return;
+    }
+    uint32_t idx = (uint32_t)d->algorithmIdx;
+
+    int mode = (modeOverride >= 0) ? modeOverride : d->modMode;
+
+    bool isOff  = (mode == 0);
+    bool ripple = (mode == 1);
+    bool seq    = (mode == 2);
+    bool drunk  = (mode == 3);
+
+    NT_setParameterGrayedOut(idx, kParamModAmt,      isOff);
+    NT_setParameterGrayedOut(idx, kParamRippleRate,  !ripple);
+    NT_setParameterGrayedOut(idx, kParamSeqSpeed,    !seq);
+    NT_setParameterGrayedOut(idx, kParamSeqSmooth,   !seq);
+    NT_setParameterGrayedOut(idx, kParamSeqDrift,    !seq);
+    NT_setParameterGrayedOut(idx, kParamSeqPattern,  !seq);
+    NT_setParameterGrayedOut(idx, kParamDrunkWander, !drunk);
+}
+
+// ----------------------------
+// construct()
+// ----------------------------
+static void construct(_NT_algorithm *base) {
+    auto *self = (_CessnaAwg*)base;
+    self->dtc = new(NT_malloc(sizeof(_CessnaAwg_DTC))) _CessnaAwg_DTC();
+    auto *d = self->dtc;
+
+    float sr = NT_getSampleRate();
+    if (sr > 0.0f) d->sampleRate = sr;
+
+    // Slew coefficient: ~5ms pitch slew
+    float slewMs = 5.0f;
+    d->slewCoeff = 1.0f - expf(-1.0f / (d->sampleRate * slewMs * 0.001f));
+}
+
+// ----------------------------
+// parameterChanged()
+// ----------------------------
+static void parameterChanged(_NT_algorithm *base, int p) {
+    auto *self = (_CessnaAwg*)base;
+    if (!self || !self->v) return;
+    auto *d = self->dtc;
+    if (!d) return;
+
+    switch (p) {
+        case kParamDepth:   d->depthD = getPct01(kParamDepth); break;
+        case kParamCurve:   d->curve  = getPct01(kParamCurve); break;
+
+        case kParamModMode: d->modMode = self->v[kParamModMode]; break;
+        case kParamModAmt:  d->modAmt  = getPct01(kParamModAmt); break;
+        case kParamRippleRate: {
+            d->rippleRate  = (float)self->v[kParamRippleRate] * 0.01f;
+            d->lfoPhaseInc = d->rippleRate / d->sampleRate;
+            break;
+        }
+        case kParamSeqSpeed:    d->seqSpeed   = 33 - self->v[kParamSeqSpeed]; break;
+        case kParamSeqSmooth:   d->seqSmooth  = getPct01(kParamSeqSmooth); break;
+        case kParamSeqDrift:    d->seqDrift   = getPct01(kParamSeqDrift); break;
+        case kParamSeqPattern:  d->seqPattern = self->v[kParamSeqPattern]; seqBuildPattern(d); break;
+        case kParamDrunkWander: d->drunkWander = getPct01(kParamDrunkWander); break;
+
+        default:
+            if (p >= kParamB1 && p <= kParamB16) {
+                int i = p - kParamB1;
+                d->B[i] = getPctSigned(p);  // ±100% → ±5V
+            }
+            break;
+    }
+
+    // Always defer grayout to step() — self->v updated by NT after callback
+    d->needsGrayOutUpdate = true;
+}
+
+// ----------------------------
+// updateDisplay: draw waveform from S[]
+// ----------------------------
+static void updateDisplay(_CessnaAwg_DTC *d) {
+    for (int k=0;k<kDisplayPoints;k++) {
+        float ph = (float)k / (float)(kDisplayPoints - 1);
+        float lin = evalLinear(d->S, ph);
+        float cur = (d->curve > 0.0001f) ? d->herm.eval(d->S, ph) : lin;
+        d->dispWave[k] = lerpf(lin, cur, d->curve);
+    }
+}
+
+// ----------------------------
+// step()
+// ----------------------------
+static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
+    auto *self = (_CessnaAwg*)base;
+    auto *d = self->dtc;
+    if (!d) return;
+
+    const int numFrames = numFramesBy4 * 4;
+
+    // Cache algorithm index on first step
+    if (d->algorithmIdx < 0) {
+        d->algorithmIdx = (int)NT_algorithmIndex(self);
+    }
+
+    // Deferred grayout
+    if (d->needsGrayOutUpdate) {
+        d->needsGrayOutUpdate = false;
+        d->modMode  = self->v[kParamModMode];
+        updateModGrayOut(base);
+    }
+
+    const int cvBus  = self->v[kParamCVIn];
+    const int outBus = self->v[kParamOut1];
+    const int outMode= self->v[kParamOut1Mode];
+
+    // busPtr helper
+    auto busPtr = [&](int busVal) -> float* {
+        if (!busFrames || busVal <= 0) return nullptr;
+        int busIndex = busVal - 1;
+        if (busIndex < 0 || busIndex >= 28) return nullptr;
+        return busFrames + busIndex * numFrames;
+    };
+
+    float *cv  = busPtr(cvBus);
+    float *out = busPtr(outBus);
+
+    for (int n=0;n<numFrames;n++) {
+        // --- Pitch from CV ---
+        // 1V/oct, 0V = C4
+        float cvVal = cv ? cv[n] : 0.0f;
+        float freq  = kC4Hz * powf(2.0f, cvVal);
+        d->phaseIncTarget = freq / d->sampleRate;
+
+        // Slew phaseInc toward target
+        d->phaseInc += d->slewCoeff * (d->phaseIncTarget - d->phaseInc);
+
+        // --- Modulation ---
+        computeModX(d);
+
+        // --- Combine bins + mod ---
+        combineS(d);
+        if (d->curve > 0.0001f) d->herm.computeSlopes(d->S);
+
+        // --- Evaluate wavetable ---
+        float lin = evalLinear(d->S, d->phase);
+        float cur = (d->curve > 0.0001f) ? d->herm.eval(d->S, d->phase) : lin;
+        float y   = lerpf(lin, cur, d->curve);
+
+        // --- Output ---
+        if (out) {
+            if (outMode == 0) out[n] += y;
+            else              out[n]  = y;
+        }
+
+        // --- Advance phase ---
+        d->phase += d->phaseInc;
+        if (d->phase >= 1.0f) {
+            d->phase -= 1.0f;
+            // Advance sequencer/drunk once per cycle
+            if (d->modMode == 2) seqAdvance(d);
+            if (d->modMode == 3) drunkAdvance(d);
+        }
+    }
+
+    // Update display waveform
+    updateDisplay(d);
+}
+
+// ----------------------------
+// draw()
+// ----------------------------
+static void draw(_NT_algorithm *base) {
+    auto *self = (_CessnaAwg*)base;
+    auto *d = self->dtc;
+    if (!d) return;
+
+    const int W = NT_getDisplayWidth();
+    const int H = NT_getDisplayHeight();
+
+    int top    = 11;
+    int bottom = H - 2;
+    int plotH  = bottom - top;
+
+    auto mapY = [&](float v)->int {
+        float vv = clampf(v, -5.0f, 5.0f);
+        float yn = 0.5f * (1.0f - (vv / 5.0f));
+        int y = top + (int)roundf(yn * (float)plotH);
+        if (y < top)  y = top;
+        if (y >= H)   y = H-1;
+        return y;
+    };
+
+    // Draw waveform from dispWave[]
+    for (int n=1;n<kDisplayPoints;n++) {
+        int x0 = (int)roundf(((float)(n-1) / (float)(kDisplayPoints-1)) * (float)(W-1));
+        int x1 = (int)roundf(((float)n     / (float)(kDisplayPoints-1)) * (float)(W-1));
+        int y0 = mapY(d->dispWave[n-1]);
+        int y1 = mapY(d->dispWave[n]);
+        NT_drawShapeI(kNT_line, x0, y0, x1, y1, 15);
+        NT_drawShapeI(kNT_line, x0, y0, x1, y1, 15); // double pass = bold
+    }
+
+    // Draw bin tick marks at the bottom
+    for (int i=0;i<kBins;i++) {
+        float ph = ((float)i + 0.5f) / (float)kBins;
+        int x = (int)roundf(ph * (float)(W-1));
+        NT_drawShapeI(kNT_line, x, H-4, x, H-1, 6);
+    }
+}
+
+// ----------------------------
+// NT API registration
+// ----------------------------
+static void calculateRequirements(_NT_algorithmRequirements &req) {
+    req.numParameters    = kNumParams;
+    req.sram             = sizeof(_CessnaAwg);
+    req.dtcm             = sizeof(_CessnaAwg_DTC);
+    req.itcm             = 0;
+    req.parameterPages   = &g_pages;
+}
+
+static _NT_algorithm* construct2(const _NT_algorithmMemoryPtrs &ptrs,
+                                  const _NT_algorithmRequirements &) {
+    auto *self = new(ptrs.sram) _CessnaAwg();
+    self->dtc  = new(ptrs.dtcm) _CessnaAwg_DTC();
+    return self;
+}
+
+static const _NT_algorithmDescriptor g_desc = {
+    .name                = "Cessna AWG",
+    .guid                = 0x43455353,   // 'CESS'
+    .version             = 1,
+    .parameters          = g_parameters,
+    .calculateRequirements = calculateRequirements,
+    .construct           = construct2,
+    .parameterChanged    = parameterChanged,
+    .step                = step,
+    .draw                = draw,
+};
+
+extern "C" const _NT_algorithmDescriptor* NT_getAlgorithmDescriptor() {
+    return &g_desc;
+}
