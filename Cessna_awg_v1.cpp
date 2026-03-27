@@ -497,7 +497,7 @@ static void combineS(struct _CessnaAwg_DTC *d) {
     float D = d->depthD;
     for (int i=0;i<kBins;i++) {
         float base = lerpf(d->slotA[i], d->slotB[i], d->morph);
-        float v = base + d->modX[i] * 2.0f;
+        float v = base + d->modX[i] * 5.0f;
         float s = (v > 5.0f || v < -5.0f) ? tanhf(v / 5.0f) * 5.0f : v;
         d->S[i] = D * s;
     }
@@ -631,11 +631,14 @@ static void buildKinkModX(struct _CessnaAwg_DTC *d) {
 
     int halfWidth = d->kinkWidth / 2;
     if (halfWidth < 1) halfWidth = 1;
+    // Pulse shape appears wider than Triangle at same Width — halve it to match visual size
+    int halfWidth1 = (d->kinkShape == 1) ? (halfWidth / 2) : halfWidth;
+    if (halfWidth1 < 1) halfWidth1 = 1;
 
     for (int i=0;i<kBins;i++) {
-        float env1 = kinkEnvelope(d->kinkShape, i, centrePos1, halfWidth);
+        float env1 = kinkEnvelope(d->kinkShape, i, centrePos1, halfWidth1);
         float env2 = (d->kink2Amt > 0.0001f)
-                   ? kinkEnvelope(d->kinkShape, i, centrePos2, halfWidth)
+                   ? kinkEnvelope(d->kinkShape, i, centrePos2, halfWidth1)
                    : 0.0f;
         d->modX[i] = d->kinkAmt * env1 + d->kink2Amt * env2;
     }
@@ -814,7 +817,7 @@ static void updateDisplay(struct _CessnaAwg_DTC *d) {
             float baseLin  = evalLinear(d->baseRaw, ph);
             float baseHerm = (d->preCurve > 0.0001f) ? d->preHerm.eval(d->baseRaw, ph) : baseLin;
             float baseVal  = lerpf(baseLin, baseHerm, d->preCurve) * d->depthD;
-            float kinkVal  = evalStepped(d->modX, ph) * 2.0f;
+            float kinkVal  = evalStepped(d->modX, ph) * 5.0f * d->depthD;
             float combined = baseVal + kinkVal;
             y = (combined > 5.0f || combined < -5.0f) ? tanhf(combined / 5.0f) * 5.0f : combined;
         } else if (postCurve > 0.0001f) {
@@ -825,7 +828,7 @@ static void updateDisplay(struct _CessnaAwg_DTC *d) {
             float baseLin  = evalLinear(d->baseRaw, ph);
             float baseHerm = (d->preCurve > 0.0001f) ? d->preHerm.eval(d->baseRaw, ph) : baseLin;
             float baseVal  = lerpf(baseLin, baseHerm, d->preCurve) * d->depthD;
-            float modVal   = evalLinear(d->modX, ph) * 2.0f;
+            float modVal   = evalLinear(d->modX, ph) * 5.0f * d->depthD;
             float combined = baseVal + modVal;
             y = (combined > 5.0f || combined < -5.0f) ? tanhf(combined / 5.0f) * 5.0f : combined;
         }
@@ -920,7 +923,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             float baseLin  = evalLinear(d->baseRaw, d->phase);
             float baseHerm = (d->preCurve > 0.0001f) ? d->preHerm.eval(d->baseRaw, d->phase) : baseLin;
             float baseVal  = lerpf(baseLin, baseHerm, d->preCurve) * d->depthD;
-            float kinkVal  = evalStepped(d->modX, d->phase) * 2.0f;
+            float kinkVal  = evalStepped(d->modX, d->phase) * 5.0f * d->depthD;
             float combined = baseVal + kinkVal;
             y = (combined > 5.0f || combined < -5.0f) ? tanhf(combined / 5.0f) * 5.0f : combined;
         } else {
@@ -928,7 +931,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             float baseLin  = evalLinear(d->baseRaw, d->phase);
             float baseHerm = (d->preCurve > 0.0001f) ? d->preHerm.eval(d->baseRaw, d->phase) : baseLin;
             float baseVal  = lerpf(baseLin, baseHerm, d->preCurve) * d->depthD;
-            float modVal   = evalLinear(d->modX, d->phase) * 2.0f;
+            float modVal   = evalLinear(d->modX, d->phase) * 5.0f * d->depthD;
             float combined = baseVal + modVal;
             if (combined > 5.0f || combined < -5.0f)
                 combined = tanhf(combined / 5.0f) * 5.0f;
