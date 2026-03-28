@@ -125,6 +125,10 @@ struct _CessnaAwg_DTC {
     PeriodicHermite16 herm;      // post-smooth hermite (on S[])
     PeriodicHermite16 preHerm;   // pre-smooth hermite (on baseRaw[])
     float baseRaw[kBins];        // raw base bins (morph only, no mod) for pre-smooth eval
+    bool  preHermDirty;          // true when baseRaw has changed and slopes need recomputing
+    bool  postHermDirty;         // true when S[] has changed and slopes need recomputing
+    bool  modXDirty;             // true when kink/scramble has advanced and modX needs recomputing
+    bool  sDirty;                // true when modX or bins have changed and S[] needs recomputing
 
     // Per-mode post-smooth
     bool  kinkStepped;      // stepped readout for kink shape only
@@ -280,6 +284,10 @@ struct _CessnaAwg_DTC {
             slotA[i] = slotB[i] = 0.0f;
             baseRaw[i] = 0.0f;
         }
+        preHermDirty  = true;
+        postHermDirty = true;
+        modXDirty     = true;
+        sDirty        = true;
 
         saveA = saveB = false;
         morph = 0.0f;
@@ -502,9 +510,11 @@ static void combineS(struct _CessnaAwg_DTC *d) {
         d->S[i] = D * s;
     }
 
-    // Store raw base (pre-depth, pre-mod) for pre-smooth evaluation at audio rate
+    // Store raw base for pre-smooth evaluation at audio rate
     for (int i=0;i<kBins;i++)
         d->baseRaw[i] = lerpf(d->slotA[i], d->slotB[i], d->morph);
+    d->preHermDirty  = true;
+    d->postHermDirty = true;
 }
 
 // ----------------------------
@@ -701,7 +711,10 @@ static void parameterChanged(_NT_algorithm *base, int p) {
 
     switch (p) {
         // Main
-        case kParamDepth:      d->depthD     = getPct01(kParamDepth); break;
+        case kParamDepth:
+            d->depthD = getPct01(kParamDepth);
+            d->sDirty = true;
+            break;
         case kParamPreCurve:   d->preCurve   = getPct01(kParamPreCurve); break;
         case kParamPostSmooth: d->postSmooth = getPct01(kParamPostSmooth); break;
         case kParamStepped:    d->stepped    = (self->v[kParamStepped] != 0); break;
@@ -714,18 +727,20 @@ static void parameterChanged(_NT_algorithm *base, int p) {
                 d->kinkPosSmoothed  = 0.0f;
                 d->kinkRangeInit    = false;
                 d->kinkAltDir       = 1;
-                // K2 starts at opposite end of range
                 float range2 = (float)(d->kinkRange - 1);
                 d->kink2Pos         = range2;
                 d->kink2PosSmoothed = range2;
                 d->kink2AltDir      = -1;
                 d->kink2SampleCount = 0;
             }
+            d->modXDirty = true;
+            d->sDirty    = true;
             break;
 
         // Ripple
         case kParamRippleAmt:
             d->rippleAmt = getPct01(kParamRippleAmt);
+            d->modXDirty = true;
             break;
         case kParamRippleRate: {
             float hz = (float)self->v[kParamRippleRate] * 0.01f;
@@ -734,7 +749,10 @@ static void parameterChanged(_NT_algorithm *base, int p) {
         }
 
         // Wave
-        case kParamKinkAmt:       d->kinkAmt       = getPct01(kParamKinkAmt); break;
+        case kParamKinkAmt:
+            d->kinkAmt = getPct01(kParamKinkAmt);
+            d->modXDirty = true;
+            break;
         case kParamKinkRate:
             d->kinkSamplePeriod = _CessnaAwg_DTC::rateToPeriod(self->v[kParamKinkRate], d->sampleRate);
             d->updateKinkGlideSlewCoeff();
@@ -758,6 +776,7 @@ static void parameterChanged(_NT_algorithm *base, int p) {
             break;
         case kParamKink2Amt:
             d->kink2Amt = getPct01(kParamKink2Amt);
+            d->modXDirty = true;
             break;
         case kParamKink2Rate:
             d->kink2SamplePeriod = _CessnaAwg_DTC::rateToPeriod(self->v[kParamKink2Rate], d->sampleRate);
@@ -765,7 +784,10 @@ static void parameterChanged(_NT_algorithm *base, int p) {
             break;
 
         // Scramble
-        case kParamScrambleAmt:  d->scrambleAmt = getPct01(kParamScrambleAmt); break;
+        case kParamScrambleAmt:
+            d->scrambleAmt = getPct01(kParamScrambleAmt);
+            d->modXDirty = true;
+            break;
         case kParamScrambleRate:
             d->scrambleSamplePeriod = _CessnaAwg_DTC::rateToPeriod(self->v[kParamScrambleRate], d->sampleRate);
             d->updateScrambleGlideSlewCoeff();
@@ -780,18 +802,29 @@ static void parameterChanged(_NT_algorithm *base, int p) {
         case kParamSaveA: {
             d->saveA = (self->v[kParamSaveA] != 0);
             if (d->saveA) for (int i=0;i<kBins;i++) d->slotA[i] = d->B[i];
+            d->sDirty = true;
+            d->preHermDirty = true;
             break;
         }
         case kParamSaveB: {
             d->saveB = (self->v[kParamSaveB] != 0);
             if (d->saveB) for (int i=0;i<kBins;i++) d->slotB[i] = d->B[i];
+            d->sDirty = true;
+            d->preHermDirty = true;
             break;
         }
-        case kParamMorph: d->morph = getPct01(kParamMorph); break;
+        case kParamMorph:
+            d->morph = getPct01(kParamMorph);
+            d->sDirty = true;
+            d->preHermDirty = true;
+            break;
 
         default:
-            if (p >= kParamB1 && p <= kParamB16)
+            if (p >= kParamB1 && p <= kParamB16) {
                 d->B[p - kParamB1] = getPctSigned(p);
+                d->sDirty      = true;
+                d->preHermDirty = true;
+            }
             break;
     }
 }
@@ -805,8 +838,14 @@ static void updateDisplay(struct _CessnaAwg_DTC *d) {
     bool useGlobalStep = d->stepped;
     bool useKinkStep   = (d->modMode == 2 && d->kinkStepped);
 
-    if (!useGlobalStep && d->preCurve > 0.0001f) d->preHerm.computeSlopes(d->baseRaw);
-    if (!useGlobalStep && !useKinkStep && postCurve > 0.0001f) d->herm.computeSlopes(d->S);
+    if (!useGlobalStep && d->preCurve > 0.0001f && d->preHermDirty) {
+        d->preHerm.computeSlopes(d->baseRaw);
+        d->preHermDirty = false;
+    }
+    if (!useGlobalStep && !useKinkStep && postCurve > 0.0001f && d->postHermDirty) {
+        d->herm.computeSlopes(d->S);
+        d->postHermDirty = false;
+    }
 
     for (int k=0;k<kDisplayPoints;k++) {
         float ph = (float)k / (float)(kDisplayPoints-1);
@@ -868,13 +907,14 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             d->phaseInc  = kC4Hz * powf(2.0f, cvVal) / d->sampleRate;
         }
 
-        // Timed advances for Wave and Scramble
+        // Timed advances for Kink
         if (d->modMode == 2) {
             // Kink 1 advance
             d->kinkSampleCount++;
             if (d->kinkSampleCount >= d->kinkSamplePeriod) {
                 d->kinkSampleCount = 0;
                 advanceKinkPosition(d);
+                d->modXDirty = true;
             }
             // Kink 2 advance (only if active)
             if (d->kink2Amt > 0.0001f) {
@@ -882,6 +922,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
                 if (d->kink2SampleCount >= d->kink2SamplePeriod) {
                     d->kink2SampleCount = 0;
                     advanceKink2Position(d);
+                    d->modXDirty = true;
                 }
             }
         } else if (d->modMode == 3) {
@@ -891,13 +932,26 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
                 d->scrambleSampleCount = 0;
                 advanceScramble(d);
             }
+            // Scramble slew is continuous — always dirty
+            d->modXDirty = true;
+        } else if (d->modMode == 1) {
+            // Ripple is continuous — always dirty
+            d->modXDirty = true;
         }
 
-        // Compute modX
-        computeModX(d);
+        // Compute modX only when needed
+        if (d->modXDirty) {
+            computeModX(d);
+            d->modXDirty = false;
+            d->sDirty    = true;
+        }
 
-        // Combine → S[] (base + modX)
-        combineS(d);
+        // Combine → S[] only when modX or bins have changed
+        if (d->sDirty) {
+            combineS(d);
+            d->sDirty        = false;
+            d->postHermDirty = true;
+        }
 
         // Post-smooth: global + per-mode (take max)
         float postCurve = d->postSmooth;
@@ -906,12 +960,16 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
         bool useGlobalStep  = d->stepped;
         bool useKinkStep    = (d->modMode == 2 && d->kinkStepped);
 
-        // Pre-smooth slopes (only needed for non-stepped base)
-        if (!useGlobalStep && d->preCurve > 0.0001f)
+        // Pre-smooth slopes — only recompute when baseRaw has changed
+        if (!useGlobalStep && d->preCurve > 0.0001f && d->preHermDirty) {
             d->preHerm.computeSlopes(d->baseRaw);
-        // Post-smooth slopes
-        if (!useGlobalStep && !useKinkStep && postCurve > 0.0001f)
+            d->preHermDirty = false;
+        }
+        // Post-smooth slopes — only recompute when S[] has changed
+        if (!useGlobalStep && !useKinkStep && postCurve > 0.0001f && d->postHermDirty) {
             d->herm.computeSlopes(d->S);
+            d->postHermDirty = false;
+        }
 
         // Evaluate wavetable
         float y;
@@ -937,7 +995,6 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
                 combined = tanhf(combined / 5.0f) * 5.0f;
             // Post-smooth
             if (postCurve > 0.0001f) {
-                d->herm.computeSlopes(d->S);
                 float sLin  = evalLinear(d->S, d->phase);
                 float sHerm = d->herm.eval(d->S, d->phase);
                 y = lerpf(sLin, sHerm, postCurve);
