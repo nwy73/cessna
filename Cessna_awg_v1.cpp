@@ -609,39 +609,48 @@ static void advanceKink2Position(struct _CessnaAwg_DTC *d) {
     }
 }
 
-// Build modX from current kink positions — sums K1 and K2 contributions
-static void buildKinkModX(struct _CessnaAwg_DTC *d) {
-    // --- Kink 1 ---
+// Update kink position slew every sample — returns true if centrePos changed
+static bool updateKinkSlew(struct _CessnaAwg_DTC *d) {
     float target1 = (float)(((int)roundf(d->kinkPos) + d->kinkRangeStart + kBins * 4) % kBins);
+    float target2 = (float)(((int)roundf(d->kink2Pos) + d->kinkRangeStart + kBins * 4) % kBins);
+
+    int oldCentre1 = ((int)roundf(d->kinkPosSmoothed) % kBins + kBins) % kBins;
+    int oldCentre2 = ((int)roundf(d->kink2PosSmoothed) % kBins + kBins) % kBins;
+
     if (d->kinkGlide > 0.0001f) {
-        float diff = target1 - d->kinkPosSmoothed;
-        if (diff >  (float)(kBins/2)) diff -= (float)kBins;
-        if (diff < -(float)(kBins/2)) diff += (float)kBins;
-        d->kinkPosSmoothed += d->kinkGlideSlewCoeff * diff;
+        float diff1 = target1 - d->kinkPosSmoothed;
+        if (diff1 >  (float)(kBins/2)) diff1 -= (float)kBins;
+        if (diff1 < -(float)(kBins/2)) diff1 += (float)kBins;
+        d->kinkPosSmoothed += d->kinkGlideSlewCoeff * diff1;
         if (d->kinkPosSmoothed < 0.0f)         d->kinkPosSmoothed += (float)kBins;
         if (d->kinkPosSmoothed >= (float)kBins) d->kinkPosSmoothed -= (float)kBins;
-    } else {
-        d->kinkPosSmoothed = target1;
-    }
-    int centrePos1 = ((int)roundf(d->kinkPosSmoothed) % kBins + kBins) % kBins;
 
-    // --- Kink 2 ---
-    float target2 = (float)(((int)roundf(d->kink2Pos) + d->kinkRangeStart + kBins * 4) % kBins);
-    if (d->kinkGlide > 0.0001f) {
-        float diff = target2 - d->kink2PosSmoothed;
-        if (diff >  (float)(kBins/2)) diff -= (float)kBins;
-        if (diff < -(float)(kBins/2)) diff += (float)kBins;
-        d->kink2PosSmoothed += d->kink2GlideSlewCoeff * diff;
-        if (d->kink2PosSmoothed < 0.0f)         d->kink2PosSmoothed += (float)kBins;
-        if (d->kink2PosSmoothed >= (float)kBins) d->kink2PosSmoothed -= (float)kBins;
+        if (d->kink2Amt > 0.0001f) {
+            float diff2 = target2 - d->kink2PosSmoothed;
+            if (diff2 >  (float)(kBins/2)) diff2 -= (float)kBins;
+            if (diff2 < -(float)(kBins/2)) diff2 += (float)kBins;
+            d->kink2PosSmoothed += d->kink2GlideSlewCoeff * diff2;
+            if (d->kink2PosSmoothed < 0.0f)         d->kink2PosSmoothed += (float)kBins;
+            if (d->kink2PosSmoothed >= (float)kBins) d->kink2PosSmoothed -= (float)kBins;
+        }
     } else {
+        d->kinkPosSmoothed  = target1;
         d->kink2PosSmoothed = target2;
     }
+
+    int newCentre1 = ((int)roundf(d->kinkPosSmoothed) % kBins + kBins) % kBins;
+    int newCentre2 = ((int)roundf(d->kink2PosSmoothed) % kBins + kBins) % kBins;
+
+    return (newCentre1 != oldCentre1) || (newCentre2 != oldCentre2);
+}
+
+// Build modX from current smoothed kink positions — sums K1 and K2 contributions
+static void buildKinkModX(struct _CessnaAwg_DTC *d) {
+    int centrePos1 = ((int)roundf(d->kinkPosSmoothed) % kBins + kBins) % kBins;
     int centrePos2 = ((int)roundf(d->kink2PosSmoothed) % kBins + kBins) % kBins;
 
     int halfWidth = d->kinkWidth / 2;
     if (halfWidth < 1) halfWidth = 1;
-    // Pulse shape appears wider than Triangle at same Width — halve it to match visual size
     int halfWidth1 = (d->kinkShape == 1) ? (halfWidth / 2) : halfWidth;
     if (halfWidth1 < 1) halfWidth1 = 1;
 
@@ -914,7 +923,6 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             if (d->kinkSampleCount >= d->kinkSamplePeriod) {
                 d->kinkSampleCount = 0;
                 advanceKinkPosition(d);
-                d->modXDirty = true;
             }
             // Kink 2 advance (only if active)
             if (d->kink2Amt > 0.0001f) {
@@ -922,9 +930,11 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
                 if (d->kink2SampleCount >= d->kink2SamplePeriod) {
                     d->kink2SampleCount = 0;
                     advanceKink2Position(d);
-                    d->modXDirty = true;
                 }
             }
+            // Slew runs every sample — only dirty if centrePos changed
+            if (updateKinkSlew(d))
+                d->modXDirty = true;
         } else if (d->modMode == 3) {
             // Scramble: timed advance
             d->scrambleSampleCount++;
