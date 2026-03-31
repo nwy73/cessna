@@ -121,6 +121,8 @@ struct _CessnaAwg_DTC {
     float phase;
     float phaseInc;
     float lastCvVal;     // cached CV value — only recompute phaseInc when CV changes
+    float tuneOffset;    // combined octave+transpose+fine offset in volts (1V/oct)
+    float fmAmt;         // FM depth scalar
 
     PeriodicHermite16 herm;      // post-smooth hermite (on S[])
     PeriodicHermite16 preHerm;   // pre-smooth hermite (on baseRaw[])
@@ -197,7 +199,14 @@ struct _CessnaAwg_DTC {
     int   algorithmIdx;
 
     // Recompute glide slew coefficient — call when Rate or Glide changes
-    void updateKinkGlideSlewCoeff() {
+    void updateTuneOffset(int octave, int transpose, int fine) {
+        // octave in semitones*12, transpose in semitones, fine in cents
+        // all convert to volts (1V/oct = 1/12V per semitone = 1/1200V per cent)
+        tuneOffset = (float)octave
+                   + (float)transpose / 12.0f
+                   + (float)fine      / 1200.0f;
+        lastCvVal = -999.0f; // force phaseInc recompute
+    }
         if (kinkGlide < 0.0001f) {
             kinkGlideSlewCoeff  = 1.0f;
             kink2GlideSlewCoeff = 1.0f;
@@ -239,7 +248,9 @@ struct _CessnaAwg_DTC {
         kinkPosSmoothed   = 0.0f;
         phase    = 0.0f;
         phaseInc = kC4Hz / kDefaultSampleRate;
-        lastCvVal = -999.0f; // force recompute on first sample
+        lastCvVal  = -999.0f; // force recompute on first sample
+        tuneOffset = 0.0f;
+        fmAmt      = 0.0f;
 
         modMode = 0;
 
@@ -312,7 +323,13 @@ struct _CessnaAwg : public _NT_algorithm {
 // ----------------------------
 enum {
     kParamCVIn = 0,
+    kParamFMIn,
     kParamOut1, kParamOut1Mode,
+
+    // Tune page
+    kParamOctave,
+    kParamTranspose,
+    kParamFineTune,
 
     // Main page
     kParamDepth,
@@ -369,7 +386,13 @@ static const char* onOffStrings[]    = {"Off","On",nullptr};
 // ----------------------------
 static const _NT_parameter g_parameters[kNumParams] = {
     NT_PARAMETER_AUDIO_INPUT("CV in", 0, 1)
+    NT_PARAMETER_AUDIO_INPUT("FM in", 0, 1)
     NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("out", 0, 13)
+
+    // Tune
+    { .name="Octave",   .min=-4, .max=4,  .def=0, .unit=kNT_unitNone,   .scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Transpose",.min=-24,.max=24, .def=0, .unit=kNT_unitNone,   .scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Fine",     .min=-100,.max=100,.def=0,.unit=kNT_unitNone,   .scaling=kNT_scalingNone,.enumStrings=nullptr },
 
     // Main
     { .name="Level",      .min=0,  .max=100,.def=50,.unit=kNT_unitPercent,.scaling=kNT_scalingNone,.enumStrings=nullptr },
@@ -429,8 +452,11 @@ static const _NT_parameter g_parameters[kNumParams] = {
 // Page index arrays
 // ----------------------------
 static const uint8_t g_pageRoutingIdx[] = {
-    (uint8_t)kParamCVIn,
+    (uint8_t)kParamCVIn,(uint8_t)kParamFMIn,
     (uint8_t)kParamOut1,(uint8_t)kParamOut1Mode,
+};
+static const uint8_t g_pageTuneIdx[] = {
+    (uint8_t)kParamOctave,(uint8_t)kParamTranspose,(uint8_t)kParamFineTune,
 };
 static const uint8_t g_pageMainIdx[] = {
     (uint8_t)kParamDepth,(uint8_t)kParamPreCurve,(uint8_t)kParamPostSmooth,(uint8_t)kParamStepped,
@@ -456,6 +482,7 @@ static const uint8_t g_pageMorphIdx[]    = { (uint8_t)kParamSaveA,(uint8_t)kPara
 
 static const _NT_parameterPage g_pages_arr[] = {
     { .name="Routing", .numParams=(uint8_t)ARRAY_SIZE(g_pageRoutingIdx),.group=0,.unused={0,0},.params=g_pageRoutingIdx },
+    { .name="Tune",    .numParams=(uint8_t)ARRAY_SIZE(g_pageTuneIdx),   .group=0,.unused={0,0},.params=g_pageTuneIdx },
     { .name="Main",    .numParams=(uint8_t)ARRAY_SIZE(g_pageMainIdx),   .group=0,.unused={0,0},.params=g_pageMainIdx },
     { .name="Waveform",.numParams=(uint8_t)ARRAY_SIZE(g_pageBinsIdx),   .group=1,.unused={0,0},.params=g_pageBinsIdx },
     { .name="Mod",     .numParams=(uint8_t)ARRAY_SIZE(g_pageModIdx),    .group=0,.unused={0,0},.params=g_pageModIdx },
@@ -724,6 +751,13 @@ static void parameterChanged(_NT_algorithm *base, int p) {
             d->depthD = getPct01(kParamDepth);
             d->sDirty = true;
             break;
+        case kParamOctave:
+        case kParamTranspose:
+        case kParamFineTune:
+            d->updateTuneOffset(self->v[kParamOctave],
+                                self->v[kParamTranspose],
+                                self->v[kParamFineTune]);
+            break;
         case kParamPreCurve:   d->preCurve   = getPct01(kParamPreCurve); break;
         case kParamPostSmooth: d->postSmooth = getPct01(kParamPostSmooth); break;
         case kParamStepped:    d->stepped    = (self->v[kParamStepped] != 0); break;
@@ -895,6 +929,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
     const int numFrames = numFramesBy4 * 4;
 
     const int cvBus  = self->v[kParamCVIn];
+    const int fmBus  = self->v[kParamFMIn];
     const int outBus = self->v[kParamOut1];
     const int outMode= self->v[kParamOut1Mode];
 
@@ -906,14 +941,17 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
     };
 
     float *cv  = busPtr(cvBus);
+    float *fm  = busPtr(fmBus);
     float *out = busPtr(outBus);
 
     for (int n=0;n<numFrames;n++) {
         // Pitch — only recompute powf when CV changes meaningfully
-        float cvVal = cv ? cv[n] : 0.0f;
-        if (fabsf(cvVal - d->lastCvVal) > 0.0001f) {
-            d->lastCvVal = cvVal;
-            d->phaseInc  = kC4Hz * powf(2.0f, cvVal) / d->sampleRate;
+        float cvVal = (cv ? cv[n] : 0.0f) + d->tuneOffset;
+        float fmVal = (fm ? fm[n] : 0.0f);
+        float totalCv = cvVal + fmVal;
+        if (fabsf(totalCv - d->lastCvVal) > 0.0001f) {
+            d->lastCvVal = totalCv;
+            d->phaseInc  = kC4Hz * powf(2.0f, totalCv) / d->sampleRate;
         }
 
         // Timed advances for Kink
