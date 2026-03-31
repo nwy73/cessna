@@ -198,22 +198,21 @@ struct _CessnaAwg_DTC {
     bool  needsGrayOutUpdate;
     int   algorithmIdx;
 
-    // Recompute glide slew coefficient — call when Rate or Glide changes
+    // Compute tuning offset in volts from Octave/Transpose/Fine parameters
     void updateTuneOffset(int octave, int transpose, int fine) {
-        // octave in semitones*12, transpose in semitones, fine in cents
-        // all convert to volts (1V/oct = 1/12V per semitone = 1/1200V per cent)
         tuneOffset = (float)octave
                    + (float)transpose / 12.0f
                    + (float)fine      / 1200.0f;
         lastCvVal = -999.0f; // force phaseInc recompute
     }
+
+    void updateKinkGlideSlewCoeff() {
         if (kinkGlide < 0.0001f) {
             kinkGlideSlewCoeff  = 1.0f;
             kink2GlideSlewCoeff = 1.0f;
         } else {
             float glideTime = kinkGlide * (float)kinkSamplePeriod;
             kinkGlideSlewCoeff = 1.0f - powf(0.001f, 1.0f / (glideTime + 1.0f));
-            // K2 uses its own period for glide scaling
             float glideTime2 = kinkGlide * (float)kink2SamplePeriod;
             kink2GlideSlewCoeff = 1.0f - powf(0.001f, 1.0f / (glideTime2 + 1.0f));
         }
