@@ -26,6 +26,10 @@
 #define M_PI_F 3.14159265358979323846f
 #endif
 
+// Unique plugin GUID for NT Gallery publishing
+// This is a standard UUID string for gallery identification.
+static const char* plugin_guid = "7A9E32B1-6D47-4D91-8B7B-5E1C8F24A6D2";
+
 extern "C" int* __errno(void) {
     static int errno_val = 0;
     return &errno_val;
@@ -1143,7 +1147,7 @@ static void initialise(_NT_staticMemoryPtrs& ptrs, const _NT_staticRequirements&
 }
 
 static _NT_factory g_factory = {
-    .guid        = NT_MULTICHAR('C','s','A','G'),
+    .guid        = NT_MULTICHAR('C','s','A','G'), // internal 4-char disting ID\n    // Gallery GUID/UUID: 7A9E32B1-6D47-4D91-8B7B-5E1C8F24A6D2,
     .name        = "Cessna AWG",
     .description = "CV-driven arbitrary waveform generator",
     .numSpecifications = 0,
