@@ -262,7 +262,7 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
     { .name="Stage Address", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
-    { .name="Pulse Length",  .min=1,.max=100,.def=1,.unit=kNT_unitMilliseconds,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
 };
 
 // ----------------------------
@@ -482,18 +482,25 @@ static void stopAFG(_MiniMARFA_DTC *d) {
 }
 
 static void syncParamsFromSelectedStage(_MiniMARFA *self) {
+    // Reflect the selected stage's flags back into the parameter values so
+    // the UI displays the correct state when the Stage selector changes.
+    // NT_setParameterValue is the correct API route since self->v[] is const.
     auto *d = self->dtc;
     if (!d) return;
     int s = self->v[kParamStage] - 1;
     if (s < 0 || s >= kStages) return;
 
-    self->v[kParamPulse1] = d->flags[s].pulse1 ? 1 : 0;
-    self->v[kParamPulse2] = d->flags[s].pulse2 ? 1 : 0;
-    self->v[kParamStop]   = d->flags[s].stop   ? 1 : 0;
-    self->v[kParamSust]   = d->flags[s].sust   ? 1 : 0;
-    self->v[kParamEnable] = d->flags[s].enable ? 1 : 0;
-    self->v[kParamFirst]  = d->flags[s].first  ? 1 : 0;
-    self->v[kParamLast]   = d->flags[s].last   ? 1 : 0;
+    int idx = NT_algorithmIndex(static_cast<const _NT_algorithm*>(self));
+    if (idx < 0) return;
+    uint32_t off = NT_parameterOffset();
+
+    NT_setParameterValue(idx, (uint32_t)kParamPulse1 + off, d->flags[s].pulse1 ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamPulse2 + off, d->flags[s].pulse2 ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamStop   + off, d->flags[s].stop   ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamSust   + off, d->flags[s].sust   ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamEnable + off, d->flags[s].enable ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamFirst  + off, d->flags[s].first  ? 1 : 0);
+    NT_setParameterValue(idx, (uint32_t)kParamLast   + off, d->flags[s].last   ? 1 : 0);
 }
 
 static void syncSelectedStageFromParams(_MiniMARFA *self) {
@@ -703,7 +710,7 @@ static bool draw(_NT_algorithm *base) {
     auto *d = self->dtc;
     if (!d) return false;
 
-    const int W = 256, H = 64;
+    const int W = 256;
     const int graphTop = 10;
     const int graphBottom = 30;
     const int rowsTop = 34;
@@ -826,7 +833,7 @@ static _NT_factory g_factory = {
     .draw              = draw,
     .midiRealtime      = nullptr,
     .midiMessage       = nullptr,
-    .tags              = kNT_tagSequencer,
+    .tags              = kNT_tagInstrument,
     .hasCustomUi       = hasCustomUi,
     .customUi          = customUi,
     .setupUi           = nullptr,
