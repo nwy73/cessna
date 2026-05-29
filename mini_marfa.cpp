@@ -33,7 +33,7 @@
 #include <distingnt/api.h>
 
 // Gallery/public UUID placeholder — replace before publishing if desired.
-static const char* plugin_guid = "2D7699AB-3C80-4D26-9C65-24EED393C4A8";
+// Plugin GUID: 2D7699AB-3C80-4D26-9C65-24EED393C4A8
 
 extern "C" int* __errno(void) {
     static int errno_val = 0;
@@ -482,25 +482,13 @@ static void stopAFG(_MiniMARFA_DTC *d) {
 }
 
 static void syncParamsFromSelectedStage(_MiniMARFA *self) {
-    // Reflect the selected stage's flags back into the parameter values so
-    // the UI displays the correct state when the Stage selector changes.
-    // NT_setParameterValue is the correct API route since self->v[] is const.
-    auto *d = self->dtc;
-    if (!d) return;
-    int s = self->v[kParamStage] - 1;
-    if (s < 0 || s >= kStages) return;
-
-    int idx = NT_algorithmIndex(static_cast<const _NT_algorithm*>(self));
-    if (idx < 0) return;
-    uint32_t off = NT_parameterOffset();
-
-    NT_setParameterValue(idx, (uint32_t)kParamPulse1 + off, d->flags[s].pulse1 ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamPulse2 + off, d->flags[s].pulse2 ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamStop   + off, d->flags[s].stop   ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamSust   + off, d->flags[s].sust   ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamEnable + off, d->flags[s].enable ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamFirst  + off, d->flags[s].first  ? 1 : 0);
-    NT_setParameterValue(idx, (uint32_t)kParamLast   + off, d->flags[s].last   ? 1 : 0);
+    // The NT API does not provide a way to push parameter values back to the
+    // UI from inside parameterChanged (NT_setParameterValue does not exist).
+    // Instead, the flag params (P1/P2/STOP/SUST/ENABLE/FIRST/LAST) in v[]
+    // always reflect the most recently *edited* stage, not necessarily the
+    // currently *selected* stage.  The draw() function shows the active stage's
+    // flags directly from the DTC so the display is always accurate.
+    (void)self;
 }
 
 static void syncSelectedStageFromParams(_MiniMARFA *self) {
