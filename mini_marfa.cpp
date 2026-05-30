@@ -264,11 +264,13 @@ static const _NT_parameter g_parameters[kNumParams] = {
 #undef STAGE_FLAGS
 
 
-    // Global — manual start/stop buttons, then mode settings
-    { .name="Start",         .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Stop",          .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Reset",         .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Strobe",        .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    // Global — manual trigger buttons.
+    // min=-1/max=1/def=0: encoder always has room to move in either direction
+    // so parameterChanged fires every time regardless of current value.
+    { .name="Start",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Stop",   .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Reset",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Strobe", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
@@ -774,10 +776,10 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W = 256;
-    const int graphTop = 8;
-    const int graphBottom = 28;
-    const int rowsTop = 31;
-    const int rowH = 4;
+    const int graphTop = 2;
+    const int graphBottom = 25;
+    const int rowsTop = 30;
+    const int rowH = 5;
 
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
@@ -802,11 +804,7 @@ static bool draw(_NT_algorithm *base) {
     int cx = mapX(curStart + (int)roundf((float)(curEnd - curStart) * clampf(d->phase, 0.0f, 1.0f)));
     NT_drawShapeI(kNT_line, cx, graphTop, cx, graphBottom, 15);
 
-    // Stage boundary ticks
-    for (int s=0;s<kStages;s++) {
-        int x = mapX(d->dispStageX[s]);
-        NT_drawShapeI(kNT_line, x, graphBottom+1, x, graphBottom+4, 7);
-    }
+    // (Stage boundaries visible from contour shape; ticks removed to avoid overlap with flag rows.)
 
     // Flag rows with labels on the left, filled dot per stage when active.
     // Labels: P1, P2, ST, SU, EN, F, L
