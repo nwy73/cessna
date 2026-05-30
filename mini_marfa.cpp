@@ -264,11 +264,12 @@ static const _NT_parameter g_parameters[kNumParams] = {
 #undef STAGE_FLAGS
 
 
-    // Global — manual trigger buttons. Reset to 0 after firing in parameterChanged.
-    { .name="Start",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Stop",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Reset",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
-    { .name="Strobe", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    // Global — manual trigger buttons.
+    // min=-1/max=1/def=0: encoder can always move either direction, fires every time.
+    { .name="Start",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Stop",   .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Reset",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Strobe", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
@@ -622,23 +623,15 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     auto *d = self->dtc;
     if (!d) return;
 
-    auto resetTrigger = [&](int param) {
-        uint32_t idx = NT_algorithmIndex(self);
-        uint32_t off = NT_parameterOffset();
-        NT_setParameterFromUi(idx, (uint32_t)param + off, 0);
-    };
-
-    // Only fire on value=1 (user turning encoder to "Fire").
-    // The resetTrigger call sets value back to 0, which re-enters here with
-    // value=0 — we must ignore that to avoid infinite recursion.
-    if (p == kParamManualStart  && self->v[kParamManualStart]  != 0) { startAFG(self, d); resetTrigger(kParamManualStart);  return; }
-    if (p == kParamManualStop   && self->v[kParamManualStop]   != 0) { stopAFG(d);        resetTrigger(kParamManualStop);   return; }
-    if (p == kParamManualReset  && self->v[kParamManualReset]  != 0) { resetAFG(self, d); resetTrigger(kParamManualReset);  return; }
-    if (p == kParamManualStrobe && self->v[kParamManualStrobe] != 0) {
+    // Trigger params: fire on any change. Value stays at whatever the user
+    // set — they can turn it back to re-fire. No reset needed.
+    if (p == kParamManualStart)  { startAFG(self, d);  return; }
+    if (p == kParamManualStop)   { stopAFG(d);         return; }
+    if (p == kParamManualReset)  { resetAFG(self, d);  return; }
+    if (p == kParamManualStrobe) {
         d->running = true;
         d->held = false;
         enterStage(self, d, nextStage(d));
-        resetTrigger(kParamManualStrobe);
         return;
     }
 
@@ -783,10 +776,10 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W = 256;
-    const int graphTop    = 2;   // small top margin
-    const int graphBottom = 22;  // 20px graph area
-    const int rowsTop     = 26;  // 3px gap; 26 + 7*5 = 61, fits with 3px spare
-    const int rowH        = 5;   // 5px per row (tiny font is 3x5, 1px gap below each)
+    const int rowH        = 5;
+    const int rowsTop     = 64 - 7 * rowH;  // = 29, rows fill exact bottom
+    const int graphBottom = rowsTop - 3;     // = 26, 3px gap above rows
+    const int graphTop    = 9;               // clear NT parameter label
 
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
@@ -839,7 +832,7 @@ static bool draw(_NT_algorithm *base) {
         }
     }
 
-    return true;  // suppress NT's standard parameter label — we own the full display
+    return false;  // keep NT's standard parameter label at top
 }
 
 // ----------------------------
