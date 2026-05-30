@@ -31,6 +31,7 @@
 #include <string.h>
 #include <new>
 #include <distingnt/api.h>
+#include <cstdio>
 
 // Gallery/public UUID placeholder — replace before publishing if desired.
 // Plugin GUID: 2D7699AB-3C80-4D26-9C65-24EED393C4A8
@@ -205,7 +206,6 @@ static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
 // String tables
 // ----------------------------
 static const char* onOffStrings[]          = {"Off", "On", nullptr};
-static const char* triggerStrings[]        = {"--", "Fire", nullptr};
 static const char* quantContStrings[]      = {"Quant", "Cont", nullptr};
 static const char* slopedSteppedStrings[]  = {"Sloped", "Stepped", nullptr};
 static const char* timeRangeStrings[]      = {".002-.03s", ".02-.3s", ".2-3s", "2-30s", nullptr};
@@ -777,18 +777,13 @@ static bool draw(_NT_algorithm *base) {
     auto *d = self->dtc;
     if (!d) return false;
 
-    const int W = 256;
+    const int W           = 256;
     const int rowH        = 6;
-    const int rowsTop     = 64 - 7 * rowH;
-    const int graphBottom = rowsTop - 3;
+    const int rowsTop     = 64 - 7 * rowH;   // = 22
+    const int graphBottom = rowsTop - 3;      // = 19
     const int graphTop    = 9;
 
-    // DEBUG: show internal state
-    char buf[64];
-    snprintf(buf, sizeof(buf), "R:%d H:%d S:%d F:%d L:%d ph:%.2f",
-             (int)d->running, (int)d->held,
-             d->currentStage, d->cycleFirst, d->cycleLast, d->phase);
-    NT_drawText(0, 9, buf, 15, kNT_textLeft, kNT_textTiny);
+    auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
     };
     auto mapY = [&](float v)->int {
@@ -798,10 +793,8 @@ static bool draw(_NT_algorithm *base) {
 
     // Contour
     for (int i=1;i<kDisplayPoints;i++) {
-        int x0 = mapX(i-1);
-        int x1 = mapX(i);
-        int y0 = mapY(d->dispY[i-1]);
-        int y1 = mapY(d->dispY[i]);
+        int x0 = mapX(i-1), x1 = mapX(i);
+        int y0 = mapY(d->dispY[i-1]), y1 = mapY(d->dispY[i]);
         NT_drawShapeI(kNT_line, x0, y0, x1, y1, 15);
     }
 
@@ -811,18 +804,14 @@ static bool draw(_NT_algorithm *base) {
     int cx = mapX(curStart + (int)roundf((float)(curEnd - curStart) * clampf(d->phase, 0.0f, 1.0f)));
     NT_drawShapeI(kNT_line, cx, graphTop, cx, graphBottom, 15);
 
-    // (Stage boundaries visible from contour shape; ticks removed to avoid overlap with flag rows.)
-
-    // Flag rows with labels on the left, filled dot per stage when active.
-    // Labels: P1, P2, ST, SU, EN, F, L
+    // Flag rows
     static const char* rowLabels[7] = { "P1","P2","ST","SU","EN","F","L" };
-    const int labelX  = 0;
-    const int dotsX0  = 14;   // x where stage columns start (after labels)
-    const int dotsW   = W - dotsX0;
+    const int dotsX0 = 14;
+    const int dotsW  = W - dotsX0;
 
     for (int r = 0; r < 7; r++) {
         int y = rowsTop + r * rowH;
-        NT_drawText(labelX, y, rowLabels[r], 7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(0, y, rowLabels[r], 7, kNT_textLeft, kNT_textTiny);
         for (int s = 0; s < kStages; s++) {
             bool vals[7] = {
                 d->flags[s].pulse1, d->flags[s].pulse2, d->flags[s].stop,
@@ -831,15 +820,13 @@ static bool draw(_NT_algorithm *base) {
             };
             if (vals[r]) {
                 int sx = dotsX0 + (int)roundf((float)s / (float)(kStages) * (float)dotsW);
-                // Dot shifted up by rowH to align with text (NT_drawText renders
-                // the character starting one row below the y coordinate given).
                 int dy = y - rowH;
                 NT_drawShapeI(kNT_rectangle, sx, dy, sx+2, dy+2, 15);
             }
         }
     }
 
-    return false;  // keep NT's standard parameter label at top
+    return false;
 }
 
 // ----------------------------
