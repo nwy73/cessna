@@ -179,17 +179,16 @@ enum {
     kParamTime1,
     kParamTime8 = kParamTime1 + 7,
 
-    // Stage Program page
-    kParamStage,
-    kParamPulse1,
-    kParamPulse2,
-    kParamStop,
-    kParamSust,
-    kParamEnable,
-    kParamFirst,
-    kParamLast,
+    // Per-stage program pages (8 stages × 7 flags = 56 params)
+    // All 56 params are contiguous: kParamS1Pulse1 + stage*kFlagsPerStage + kFlagXxx
+    kParamS1Pulse1,
+    kParamS8Last   = kParamS1Pulse1 + 8*7 - 1,
 
-    // Global page
+    // Global page — starts immediately after the 56 stage flag params
+    kParamManualStart  = kParamS8Last + 1,
+    kParamManualStop,
+    kParamManualReset,
+    kParamManualStrobe,
     kParamQuantCont,
     kParamSlopedStepped,
     kParamTimeRange,
@@ -198,6 +197,9 @@ enum {
     kParamPulseLength,
 };
 static constexpr int kNumParams = kParamPulseLength + 1;
+static constexpr int kFlagsPerStage = 7;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last
+static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
+                     kFlagSust  = 3, kFlagEnable = 4, kFlagFirst = 5, kFlagLast = 6;
 
 // ----------------------------
 // String tables
@@ -246,17 +248,26 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Time 7", .min=0,.max=1000,.def=500,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Time 8", .min=0,.max=1000,.def=500,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
 
-    // Stage Program — one selected stage, flags edited in MARF panel order.
-    { .name="Stage",  .min=1,.max=8,.def=1,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Pulse 1",.min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
-    { .name="Pulse 2",.min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
-    { .name="Stop",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
-    { .name="Sust",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
-    { .name="Enable", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
-    { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
+    // Per-stage program params (8 stages × 7 flags = 56 params).
+    // Indexed as kParamS1Pulse1 + stage*kFlagsPerStage + kFlagXxx.
+#define STAGE_FLAGS \
+    { .name="Pulse 1",.min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Pulse 2",.min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Stop",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Sust",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Enable", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
+    STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
+    STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
+#undef STAGE_FLAGS
 
-    // Global
+
+    // Global — manual start/stop buttons, then mode settings
+    { .name="Start",         .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Stop",          .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Reset",         .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Strobe",        .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
@@ -275,8 +286,8 @@ static const uint8_t g_pageRoutingIdx[] = {
     (uint8_t)kParamP1Out,(uint8_t)kParamP1OutMode,
     (uint8_t)kParamP2Out,(uint8_t)kParamP2OutMode,
     (uint8_t)kParamAPOut,(uint8_t)kParamAPOutMode,
-    (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,(uint8_t)kParamResetIn,
-    (uint8_t)kParamStrobeIn,(uint8_t)kParamSExtIn,
+    (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,
+    (uint8_t)kParamResetIn,(uint8_t)kParamStrobeIn,(uint8_t)kParamSExtIn,
 };
 static const uint8_t g_pageCVIdx[] = {
     (uint8_t)(kParamCV1+0),(uint8_t)(kParamCV1+1),(uint8_t)(kParamCV1+2),(uint8_t)(kParamCV1+3),
@@ -286,22 +297,66 @@ static const uint8_t g_pageTimeIdx[] = {
     (uint8_t)(kParamTime1+0),(uint8_t)(kParamTime1+1),(uint8_t)(kParamTime1+2),(uint8_t)(kParamTime1+3),
     (uint8_t)(kParamTime1+4),(uint8_t)(kParamTime1+5),(uint8_t)(kParamTime1+6),(uint8_t)(kParamTime1+7),
 };
-static const uint8_t g_pageStageIdx[] = {
-    (uint8_t)kParamStage,
-    (uint8_t)kParamPulse1,(uint8_t)kParamPulse2,(uint8_t)kParamStop,(uint8_t)kParamSust,
-    (uint8_t)kParamEnable,(uint8_t)kParamFirst,(uint8_t)kParamLast,
+static const uint8_t g_pageStage1Idx[] = {
+    (uint8_t)(kParamS1Pulse1+0),(uint8_t)(kParamS1Pulse1+1),(uint8_t)(kParamS1Pulse1+2),
+    (uint8_t)(kParamS1Pulse1+3),(uint8_t)(kParamS1Pulse1+4),(uint8_t)(kParamS1Pulse1+5),
+    (uint8_t)(kParamS1Pulse1+6),
+};
+static const uint8_t g_pageStage2Idx[] = {
+    (uint8_t)(kParamS1Pulse1+7),(uint8_t)(kParamS1Pulse1+8),(uint8_t)(kParamS1Pulse1+9),
+    (uint8_t)(kParamS1Pulse1+10),(uint8_t)(kParamS1Pulse1+11),(uint8_t)(kParamS1Pulse1+12),
+    (uint8_t)(kParamS1Pulse1+13),
+};
+static const uint8_t g_pageStage3Idx[] = {
+    (uint8_t)(kParamS1Pulse1+14),(uint8_t)(kParamS1Pulse1+15),(uint8_t)(kParamS1Pulse1+16),
+    (uint8_t)(kParamS1Pulse1+17),(uint8_t)(kParamS1Pulse1+18),(uint8_t)(kParamS1Pulse1+19),
+    (uint8_t)(kParamS1Pulse1+20),
+};
+static const uint8_t g_pageStage4Idx[] = {
+    (uint8_t)(kParamS1Pulse1+21),(uint8_t)(kParamS1Pulse1+22),(uint8_t)(kParamS1Pulse1+23),
+    (uint8_t)(kParamS1Pulse1+24),(uint8_t)(kParamS1Pulse1+25),(uint8_t)(kParamS1Pulse1+26),
+    (uint8_t)(kParamS1Pulse1+27),
+};
+static const uint8_t g_pageStage5Idx[] = {
+    (uint8_t)(kParamS1Pulse1+28),(uint8_t)(kParamS1Pulse1+29),(uint8_t)(kParamS1Pulse1+30),
+    (uint8_t)(kParamS1Pulse1+31),(uint8_t)(kParamS1Pulse1+32),(uint8_t)(kParamS1Pulse1+33),
+    (uint8_t)(kParamS1Pulse1+34),
+};
+static const uint8_t g_pageStage6Idx[] = {
+    (uint8_t)(kParamS1Pulse1+35),(uint8_t)(kParamS1Pulse1+36),(uint8_t)(kParamS1Pulse1+37),
+    (uint8_t)(kParamS1Pulse1+38),(uint8_t)(kParamS1Pulse1+39),(uint8_t)(kParamS1Pulse1+40),
+    (uint8_t)(kParamS1Pulse1+41),
+};
+static const uint8_t g_pageStage7Idx[] = {
+    (uint8_t)(kParamS1Pulse1+42),(uint8_t)(kParamS1Pulse1+43),(uint8_t)(kParamS1Pulse1+44),
+    (uint8_t)(kParamS1Pulse1+45),(uint8_t)(kParamS1Pulse1+46),(uint8_t)(kParamS1Pulse1+47),
+    (uint8_t)(kParamS1Pulse1+48),
+};
+static const uint8_t g_pageStage8Idx[] = {
+    (uint8_t)(kParamS1Pulse1+49),(uint8_t)(kParamS1Pulse1+50),(uint8_t)(kParamS1Pulse1+51),
+    (uint8_t)(kParamS1Pulse1+52),(uint8_t)(kParamS1Pulse1+53),(uint8_t)(kParamS1Pulse1+54),
+    (uint8_t)(kParamS1Pulse1+55),
 };
 static const uint8_t g_pageGlobalIdx[] = {
+    (uint8_t)kParamManualStart,(uint8_t)kParamManualStop,
+    (uint8_t)kParamManualReset,(uint8_t)kParamManualStrobe,
     (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
 };
 
 static const _NT_parameterPage g_pages_arr[] = {
-    { .name="Routing",       .numParams=(uint8_t)ARRAY_SIZE(g_pageRoutingIdx),.group=0,.unused={0,0},.params=g_pageRoutingIdx },
-    { .name="CV Levels",     .numParams=(uint8_t)ARRAY_SIZE(g_pageCVIdx),     .group=1,.unused={0,0},.params=g_pageCVIdx },
-    { .name="Time Levels",   .numParams=(uint8_t)ARRAY_SIZE(g_pageTimeIdx),   .group=1,.unused={0,0},.params=g_pageTimeIdx },
-    { .name="Stage Program", .numParams=(uint8_t)ARRAY_SIZE(g_pageStageIdx),  .group=0,.unused={0,0},.params=g_pageStageIdx },
-    { .name="Global",        .numParams=(uint8_t)ARRAY_SIZE(g_pageGlobalIdx), .group=0,.unused={0,0},.params=g_pageGlobalIdx },
+    { .name="Routing",     .numParams=(uint8_t)ARRAY_SIZE(g_pageRoutingIdx),.group=0,.unused={0,0},.params=g_pageRoutingIdx },
+    { .name="CV Levels",   .numParams=(uint8_t)ARRAY_SIZE(g_pageCVIdx),     .group=1,.unused={0,0},.params=g_pageCVIdx },
+    { .name="Time Levels", .numParams=(uint8_t)ARRAY_SIZE(g_pageTimeIdx),   .group=1,.unused={0,0},.params=g_pageTimeIdx },
+    { .name="Stage 1",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage1Idx), .group=2,.unused={0,0},.params=g_pageStage1Idx },
+    { .name="Stage 2",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage2Idx), .group=2,.unused={0,0},.params=g_pageStage2Idx },
+    { .name="Stage 3",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage3Idx), .group=2,.unused={0,0},.params=g_pageStage3Idx },
+    { .name="Stage 4",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage4Idx), .group=2,.unused={0,0},.params=g_pageStage4Idx },
+    { .name="Stage 5",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage5Idx), .group=2,.unused={0,0},.params=g_pageStage5Idx },
+    { .name="Stage 6",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage6Idx), .group=2,.unused={0,0},.params=g_pageStage6Idx },
+    { .name="Stage 7",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage7Idx), .group=2,.unused={0,0},.params=g_pageStage7Idx },
+    { .name="Stage 8",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage8Idx), .group=2,.unused={0,0},.params=g_pageStage8Idx },
+    { .name="Global",      .numParams=(uint8_t)ARRAY_SIZE(g_pageGlobalIdx), .group=0,.unused={0,0},.params=g_pageGlobalIdx },
 };
 static const _NT_parameterPages g_pages = {
     .numPages = ARRAY_SIZE(g_pages_arr),
@@ -491,19 +546,22 @@ static void syncParamsFromSelectedStage(_MiniMARFA *self) {
     (void)self;
 }
 
-static void syncSelectedStageFromParams(_MiniMARFA *self) {
+static void syncSelectedStageFromParams(_MiniMARFA *self, int p) {
+    // Called when any flag param changes.  Determine which stage changed
+    // from the param index, then update that stage's flags in the DTC.
     auto *d = self->dtc;
     if (!d) return;
-    int s = self->v[kParamStage] - 1;
+    int s = (p - kParamS1Pulse1) / kFlagsPerStage;
     if (s < 0 || s >= kStages) return;
+    int base = kParamS1Pulse1 + s * kFlagsPerStage;
 
-    d->flags[s].pulse1 = (self->v[kParamPulse1] != 0);
-    d->flags[s].pulse2 = (self->v[kParamPulse2] != 0);
-    d->flags[s].stop   = (self->v[kParamStop]   != 0);
-    d->flags[s].sust   = (self->v[kParamSust]   != 0);
-    d->flags[s].enable = (self->v[kParamEnable] != 0);
-    d->flags[s].first  = (self->v[kParamFirst]  != 0);
-    d->flags[s].last   = (self->v[kParamLast]   != 0);
+    d->flags[s].pulse1 = (self->v[base + kFlagPulse1] != 0);
+    d->flags[s].pulse2 = (self->v[base + kFlagPulse2] != 0);
+    d->flags[s].stop   = (self->v[base + kFlagStop]   != 0);
+    d->flags[s].sust   = (self->v[base + kFlagSust]   != 0);
+    d->flags[s].enable = (self->v[base + kFlagEnable] != 0);
+    d->flags[s].first  = (self->v[base + kFlagFirst]  != 0);
+    d->flags[s].last   = (self->v[base + kFlagLast]   != 0);
     resolveCycleForStage(d, d->currentStage);
 }
 
@@ -553,13 +611,19 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     auto *d = self->dtc;
     if (!d) return;
 
-    if (p == kParamStage) {
-        syncParamsFromSelectedStage(self);
+    if (p == kParamManualStart)  { startAFG(self, d);  return; }
+    if (p == kParamManualStop)   { stopAFG(d);         return; }
+    if (p == kParamManualReset)  { resetAFG(self, d);  return; }
+    if (p == kParamManualStrobe) {
+        // Advance one stage (mirrors the ADVANCE button on the real MARF).
+        d->running = true;
+        d->held = false;
+        enterStage(self, d, nextStage(d));
         return;
     }
 
-    if (p >= kParamPulse1 && p <= kParamLast) {
-        syncSelectedStageFromParams(self);
+    if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
+        syncSelectedStageFromParams(self, p);
         return;
     }
 
@@ -783,6 +847,20 @@ static _NT_algorithm* construct(const _NT_algorithmMemoryPtrs& ptrs,
     float sr = (float)NT_globals.sampleRate;
     if (sr < 8000.0f || sr > 192000.0f) sr = kDefaultSampleRate;
     d->sampleRate = sr;
+
+    // Seed DTC flags from parameter values — essential for preset restore,
+    // since the NT sets v[] before calling construct.
+    for (int s = 0; s < kStages; s++) {
+        int base = kParamS1Pulse1 + s * kFlagsPerStage;
+        d->flags[s].pulse1 = (self->v[base + kFlagPulse1] != 0);
+        d->flags[s].pulse2 = (self->v[base + kFlagPulse2] != 0);
+        d->flags[s].stop   = (self->v[base + kFlagStop]   != 0);
+        d->flags[s].sust   = (self->v[base + kFlagSust]   != 0);
+        d->flags[s].enable = (self->v[base + kFlagEnable] != 0);
+        d->flags[s].first  = (self->v[base + kFlagFirst]  != 0);
+        d->flags[s].last   = (self->v[base + kFlagLast]   != 0);
+    }
+    resolveCycleForStage(d, 0);
 
     // Start at stage 1, held. A START pulse begins traversal.
     d->currentStage = 0;
