@@ -264,13 +264,11 @@ static const _NT_parameter g_parameters[kNumParams] = {
 #undef STAGE_FLAGS
 
 
-    // Global — manual trigger buttons.
-    // min=-1/max=1/def=0: encoder always has room to move in either direction
-    // so parameterChanged fires every time regardless of current value.
-    { .name="Start",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Stop",   .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Reset",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Strobe", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    // Global — manual trigger buttons. Reset to 0 after firing in parameterChanged.
+    { .name="Start",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Stop",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Reset",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Strobe", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
@@ -624,14 +622,23 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     auto *d = self->dtc;
     if (!d) return;
 
-    if (p == kParamManualStart)  { startAFG(self, d);  return; }
-    if (p == kParamManualStop)   { stopAFG(d);         return; }
-    if (p == kParamManualReset)  { resetAFG(self, d);  return; }
-    if (p == kParamManualStrobe) {
-        // Advance one stage (mirrors the ADVANCE button on the real MARF).
+    auto resetTrigger = [&](int param) {
+        uint32_t idx = NT_algorithmIndex(self);
+        uint32_t off = NT_parameterOffset();
+        NT_setParameterFromUi(idx, (uint32_t)param + off, 0);
+    };
+
+    // Only fire on value=1 (user turning encoder to "Fire").
+    // The resetTrigger call sets value back to 0, which re-enters here with
+    // value=0 — we must ignore that to avoid infinite recursion.
+    if (p == kParamManualStart  && self->v[kParamManualStart]  != 0) { startAFG(self, d); resetTrigger(kParamManualStart);  return; }
+    if (p == kParamManualStop   && self->v[kParamManualStop]   != 0) { stopAFG(d);        resetTrigger(kParamManualStop);   return; }
+    if (p == kParamManualReset  && self->v[kParamManualReset]  != 0) { resetAFG(self, d); resetTrigger(kParamManualReset);  return; }
+    if (p == kParamManualStrobe && self->v[kParamManualStrobe] != 0) {
         d->running = true;
         d->held = false;
         enterStage(self, d, nextStage(d));
+        resetTrigger(kParamManualStrobe);
         return;
     }
 
@@ -776,10 +783,10 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W = 256;
-    const int graphTop = 2;
-    const int graphBottom = 25;
-    const int rowsTop = 30;
-    const int rowH = 5;
+    const int graphTop    = 2;   // small top margin
+    const int graphBottom = 22;  // 20px graph area
+    const int rowsTop     = 26;  // 3px gap; 26 + 7*5 = 61, fits with 3px spare
+    const int rowH        = 5;   // 5px per row (tiny font is 3x5, 1px gap below each)
 
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
@@ -815,9 +822,7 @@ static bool draw(_NT_algorithm *base) {
 
     for (int r = 0; r < 7; r++) {
         int y = rowsTop + r * rowH;
-        // Draw label in dim colour
         NT_drawText(labelX, y, rowLabels[r], 7, kNT_textLeft, kNT_textTiny);
-        // Draw a dot for each stage that has this flag set
         for (int s = 0; s < kStages; s++) {
             bool vals[7] = {
                 d->flags[s].pulse1, d->flags[s].pulse2, d->flags[s].stop,
@@ -825,14 +830,16 @@ static bool draw(_NT_algorithm *base) {
                 d->flags[s].last,
             };
             if (vals[r]) {
-                // Position dot at the stage's x position, scaled into dotsX0..W
                 int sx = dotsX0 + (int)roundf((float)s / (float)(kStages) * (float)dotsW);
-                NT_drawShapeI(kNT_rectangle, sx, y+1, sx+2, y+3, 15);
+                // Dot shifted up by rowH to align with text (NT_drawText renders
+                // the character starting one row below the y coordinate given).
+                int dy = y - rowH;
+                NT_drawShapeI(kNT_rectangle, sx, dy, sx+2, dy+2, 15);
             }
         }
     }
 
-    return false;
+    return true;  // suppress NT's standard parameter label — we own the full display
 }
 
 // ----------------------------
