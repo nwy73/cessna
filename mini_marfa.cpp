@@ -338,10 +338,10 @@ static const uint8_t g_pageStage8Idx[] = {
     (uint8_t)(kParamS1Pulse1+55),
 };
 static const uint8_t g_pageGlobalIdx[] = {
-    (uint8_t)kParamManualStart,(uint8_t)kParamStartIn,
-    (uint8_t)kParamManualStop,(uint8_t)kParamStopIn,
-    (uint8_t)kParamManualReset,(uint8_t)kParamResetIn,
-    (uint8_t)kParamManualStrobe,(uint8_t)kParamStrobeIn,
+    (uint8_t)kParamManualStart,
+    (uint8_t)kParamManualStop,
+    (uint8_t)kParamManualReset,
+    (uint8_t)kParamManualStrobe,
     (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
 };
@@ -513,13 +513,21 @@ static void startAFG(_MiniMARFA *self, _MiniMARFA_DTC *d) {
     if (d->held) {
         int s = d->currentStage;
         if (d->flags[s].stop) {
+            // Held at a STOP stage — advance to next stage.
             d->held = false;
             d->running = true;
             enterStage(self, d, nextStage(d));
         } else if (d->flags[s].sust && !d->startGate) {
+            // Held at SUST with gate low — release hold, continue.
             d->held = false;
         } else if (d->flags[s].enable && d->startGate) {
+            // Held at ENABLE with gate high — release hold, continue.
             d->held = false;
+        } else {
+            // Generic held state (e.g. initial startup) — just start from cycleFirst.
+            d->held = false;
+            d->running = true;
+            enterStage(self, d, d->cycleFirst);
         }
         return;
     }
@@ -766,10 +774,10 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W = 256;
-    const int graphTop = 10;
-    const int graphBottom = 30;
-    const int rowsTop = 34;
-    const int rowH = 5;
+    const int graphTop = 8;
+    const int graphBottom = 28;
+    const int rowsTop = 31;
+    const int rowH = 4;
 
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
@@ -800,24 +808,28 @@ static bool draw(_NT_algorithm *base) {
         NT_drawShapeI(kNT_line, x, graphBottom+1, x, graphBottom+4, 7);
     }
 
-    // Programming rows: P1, P2, ST, SU, EN, F, L.
-    // Keep labels off-screen-minimal; rows align with stage columns.
-    for (int s=0;s<kStages;s++) {
-        int x = mapX(d->dispStageX[s]) + 2;
-        if (x > W-3) x = W-3;
-        bool vals[7] = {
-            d->flags[s].pulse1,
-            d->flags[s].pulse2,
-            d->flags[s].stop,
-            d->flags[s].sust,
-            d->flags[s].enable,
-            d->flags[s].first,
-            d->flags[s].last,
-        };
-        for (int r=0;r<7;r++) {
+    // Flag rows with labels on the left, filled dot per stage when active.
+    // Labels: P1, P2, ST, SU, EN, F, L
+    static const char* rowLabels[7] = { "P1","P2","ST","SU","EN","F","L" };
+    const int labelX  = 0;
+    const int dotsX0  = 14;   // x where stage columns start (after labels)
+    const int dotsW   = W - dotsX0;
+
+    for (int r = 0; r < 7; r++) {
+        int y = rowsTop + r * rowH;
+        // Draw label in dim colour
+        NT_drawText(labelX, y, rowLabels[r], 7, kNT_textLeft, kNT_textTiny);
+        // Draw a dot for each stage that has this flag set
+        for (int s = 0; s < kStages; s++) {
+            bool vals[7] = {
+                d->flags[s].pulse1, d->flags[s].pulse2, d->flags[s].stop,
+                d->flags[s].sust,   d->flags[s].enable, d->flags[s].first,
+                d->flags[s].last,
+            };
             if (vals[r]) {
-                int y = rowsTop + r * rowH;
-                NT_drawShapeI(kNT_rectangle, x, y, x+2, y+2, 15);
+                // Position dot at the stage's x position, scaled into dotsX0..W
+                int sx = dotsX0 + (int)roundf((float)s / (float)(kStages) * (float)dotsW);
+                NT_drawShapeI(kNT_rectangle, sx, y+1, sx+2, y+3, 15);
             }
         }
     }
@@ -865,15 +877,13 @@ static _NT_algorithm* construct(const _NT_algorithmMemoryPtrs& ptrs,
     }
     resolveCycleForStage(d, 0);
 
-    // Start at stage 1, held. A START pulse begins traversal.
-    d->currentStage = 0;
-    d->cycleFirst = 0;
-    d->cycleLast = kStages - 1;
-    d->sampledVoltage = entryVoltage(self, 0);
-    d->targetVoltage = d->sampledVoltage;
-    d->output = d->targetVoltage;
-    d->fromVoltage = d->output;
-    d->stageDurationSeconds = timeLevelToSeconds(self, 0);
+    // Start halted at cycleFirst. A START pulse begins traversal.
+    d->currentStage   = d->cycleFirst;
+    d->sampledVoltage = entryVoltage(self, d->cycleFirst);
+    d->targetVoltage  = d->sampledVoltage;
+    d->output         = d->targetVoltage;
+    d->fromVoltage    = d->output;
+    d->stageDurationSeconds = timeLevelToSeconds(self, d->cycleFirst);
 
     updateDisplayData(self, d);
     return self;
