@@ -223,10 +223,10 @@ static const _NT_parameter g_parameters[kNumParams] = {
     NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 1",     0, 0)
     NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 2",     0, 0)
     NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("All Pulses",  0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Start",  0, 1)
-    NT_PARAMETER_AUDIO_INPUT("Stop",   0, 2)
-    NT_PARAMETER_AUDIO_INPUT("Reset",  0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Strobe", 0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Start",     0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Stop",      0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Reset",     0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Strobe",    0, 0)
     NT_PARAMETER_AUDIO_INPUT("Stage Ext", 0, 0)
 
     // CV levels — 0..1000 maps to selected voltage range.
@@ -288,6 +288,8 @@ static const uint8_t g_pageRoutingIdx[] = {
     (uint8_t)kParamP1Out,(uint8_t)kParamP1OutMode,
     (uint8_t)kParamP2Out,(uint8_t)kParamP2OutMode,
     (uint8_t)kParamAPOut,(uint8_t)kParamAPOutMode,
+    (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,
+    (uint8_t)kParamResetIn,(uint8_t)kParamStrobeIn,
     (uint8_t)kParamSExtIn,
 };
 static const uint8_t g_pageCVIdx[] = {
@@ -776,12 +778,17 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W = 256;
-    const int rowH        = 5;
-    const int rowsTop     = 64 - 7 * rowH;  // = 29, rows fill exact bottom
-    const int graphBottom = rowsTop - 3;     // = 26, 3px gap above rows
-    const int graphTop    = 9;               // clear NT parameter label
+    const int rowH        = 6;
+    const int rowsTop     = 64 - 7 * rowH;
+    const int graphBottom = rowsTop - 3;
+    const int graphTop    = 9;
 
-    auto mapX = [&](int idx)->int {
+    // DEBUG: show internal state
+    char buf[64];
+    snprintf(buf, sizeof(buf), "R:%d H:%d S:%d F:%d L:%d ph:%.2f",
+             (int)d->running, (int)d->held,
+             d->currentStage, d->cycleFirst, d->cycleLast, d->phase);
+    NT_drawText(0, 9, buf, 15, kNT_textLeft, kNT_textTiny);
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
     };
     auto mapY = [&](float v)->int {
