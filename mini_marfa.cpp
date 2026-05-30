@@ -205,6 +205,7 @@ static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
 // String tables
 // ----------------------------
 static const char* onOffStrings[]          = {"Off", "On", nullptr};
+static const char* triggerStrings[]        = {"--", "Fire", nullptr};
 static const char* quantContStrings[]      = {"Quant", "Cont", nullptr};
 static const char* slopedSteppedStrings[]  = {"Sloped", "Stepped", nullptr};
 static const char* timeRangeStrings[]      = {".002-.03s", ".02-.3s", ".2-3s", "2-30s", nullptr};
@@ -264,16 +265,16 @@ static const _NT_parameter g_parameters[kNumParams] = {
 
 
     // Global — manual start/stop buttons, then mode settings
-    { .name="Start",         .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Stop",          .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Reset",         .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Strobe",        .min=0,.max=1,.def=0,.unit=kNT_unitConfirm,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Start",         .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Stop",          .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Reset",         .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
+    { .name="Strobe",        .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=triggerStrings },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
     { .name="Stage Address", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
-    { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitMs,.scaling=kNT_scalingNone,.enumStrings=nullptr },
 };
 
 // ----------------------------
@@ -286,8 +287,7 @@ static const uint8_t g_pageRoutingIdx[] = {
     (uint8_t)kParamP1Out,(uint8_t)kParamP1OutMode,
     (uint8_t)kParamP2Out,(uint8_t)kParamP2OutMode,
     (uint8_t)kParamAPOut,(uint8_t)kParamAPOutMode,
-    (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,
-    (uint8_t)kParamResetIn,(uint8_t)kParamStrobeIn,(uint8_t)kParamSExtIn,
+    (uint8_t)kParamSExtIn,
 };
 static const uint8_t g_pageCVIdx[] = {
     (uint8_t)(kParamCV1+0),(uint8_t)(kParamCV1+1),(uint8_t)(kParamCV1+2),(uint8_t)(kParamCV1+3),
@@ -338,8 +338,10 @@ static const uint8_t g_pageStage8Idx[] = {
     (uint8_t)(kParamS1Pulse1+55),
 };
 static const uint8_t g_pageGlobalIdx[] = {
-    (uint8_t)kParamManualStart,(uint8_t)kParamManualStop,
-    (uint8_t)kParamManualReset,(uint8_t)kParamManualStrobe,
+    (uint8_t)kParamManualStart,(uint8_t)kParamStartIn,
+    (uint8_t)kParamManualStop,(uint8_t)kParamStopIn,
+    (uint8_t)kParamManualReset,(uint8_t)kParamResetIn,
+    (uint8_t)kParamManualStrobe,(uint8_t)kParamStrobeIn,
     (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
 };
@@ -508,11 +510,6 @@ static void enterStage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage) {
 }
 
 static void startAFG(_MiniMARFA *self, _MiniMARFA_DTC *d) {
-    if (!d->running) {
-        d->running = true;
-        // If completely stopped at startup, begin from current stage.
-    }
-
     if (d->held) {
         int s = d->currentStage;
         if (d->flags[s].stop) {
@@ -524,6 +521,12 @@ static void startAFG(_MiniMARFA *self, _MiniMARFA_DTC *d) {
         } else if (d->flags[s].enable && d->startGate) {
             d->held = false;
         }
+        return;
+    }
+
+    if (!d->running) {
+        d->running = true;
+        enterStage(self, d, d->cycleFirst);
     }
 }
 
