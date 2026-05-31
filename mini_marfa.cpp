@@ -817,34 +817,43 @@ static bool draw(_NT_algorithm *base) {
 
     // Flag display: 2 rows of equal-width columns, independent of stage time.
     // Row 0: P1 P2 ST  |  Row 1: SU EN F L
-    // Each column is W/kStages wide. Active flags shown as filled sub-cells.
     const int colW  = W / kStages;   // 32px per stage
-    const int rowH2 = 8;             // height of each flag row
-    const int row0y = rowsTop;
-    const int row1y = rowsTop + rowH2 + 1;
+    const int rowH2 = 8;
+    const int legendY = rowsTop - 4; // legend just above rows
+    const int row0y   = rowsTop;
+    const int row1y   = rowsTop + rowH2 + 1;
+
+    // Legend: P1 P2 ST above row 0, SU EN F L above row 1
+    // Draw once, positioned at left edge of their sub-cells in stage 0
+    {
+        int t = colW / 3;
+        int q = colW / 4;
+        NT_drawText(0,       legendY, "P1", 7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(t,       legendY, "P2", 7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(2*t,     legendY, "ST", 7, kNT_textLeft, kNT_textTiny);
+        // Row 1 labels on right half of legend line
+        int off = W/2;
+        NT_drawText(off,       legendY, "SU", 7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(off+q,     legendY, "EN", 7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(off+2*q,   legendY, "F",  7, kNT_textLeft, kNT_textTiny);
+        NT_drawText(off+3*q,   legendY, "L",  7, kNT_textLeft, kNT_textTiny);
+    }
 
     for (int s = 0; s < kStages; s++) {
         int x = s * colW;
-        // Vertical divider between stages
         NT_drawShapeI(kNT_line, x, row0y, x, row1y + rowH2, 5);
 
-        // Row 0: P1(left third) P2(mid third) ST(right third)
         int t = colW / 3;
-        if (d->flags[s].pulse1) NT_drawShapeI(kNT_rectangle, x+1,   row0y+1, x+t-1,     row0y+rowH2-1, 15);
-        if (d->flags[s].pulse2) NT_drawShapeI(kNT_rectangle, x+t+1, row0y+1, x+2*t-1,   row0y+rowH2-1, 15);
-        if (d->flags[s].stop)   NT_drawShapeI(kNT_rectangle, x+2*t+1,row0y+1,x+colW-2,  row0y+rowH2-1, 15);
+        if (d->flags[s].pulse1) NT_drawShapeI(kNT_rectangle, x+1,      row0y+1, x+t-1,    row0y+rowH2-1, 15);
+        if (d->flags[s].pulse2) NT_drawShapeI(kNT_rectangle, x+t+1,    row0y+1, x+2*t-1,  row0y+rowH2-1, 15);
+        if (d->flags[s].stop)   NT_drawShapeI(kNT_rectangle, x+2*t+1,  row0y+1, x+colW-2, row0y+rowH2-1, 15);
 
-        // Row 1: SU EN F L (quarters)
         int q = colW / 4;
-        if (d->flags[s].sust)   NT_drawShapeI(kNT_rectangle, x+1,     row1y+1, x+q-1,     row1y+rowH2-1, 15);
-        if (d->flags[s].enable) NT_drawShapeI(kNT_rectangle, x+q+1,   row1y+1, x+2*q-1,   row1y+rowH2-1, 15);
-        if (d->flags[s].first)  NT_drawShapeI(kNT_rectangle, x+2*q+1, row1y+1, x+3*q-1,   row1y+rowH2-1, 15);
-        if (d->flags[s].last)   NT_drawShapeI(kNT_rectangle, x+3*q+1, row1y+1, x+colW-2,  row1y+rowH2-1, 15);
+        if (d->flags[s].sust)   NT_drawShapeI(kNT_rectangle, x+1,      row1y+1, x+q-1,    row1y+rowH2-1, 15);
+        if (d->flags[s].enable) NT_drawShapeI(kNT_rectangle, x+q+1,    row1y+1, x+2*q-1,  row1y+rowH2-1, 15);
+        if (d->flags[s].first)  NT_drawShapeI(kNT_rectangle, x+2*q+1,  row1y+1, x+3*q-1,  row1y+rowH2-1, 15);
+        if (d->flags[s].last)   NT_drawShapeI(kNT_rectangle, x+3*q+1,  row1y+1, x+colW-2, row1y+rowH2-1, 15);
     }
-
-    // Row labels on far left (tiny, dim)
-    NT_drawText(0, row0y+1, "P", 5, kNT_textLeft, kNT_textTiny);
-    NT_drawText(0, row1y+1, "H", 5, kNT_textLeft, kNT_textTiny);
 
     return false;
 }
