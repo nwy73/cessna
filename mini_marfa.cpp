@@ -108,6 +108,12 @@ struct _MiniMARFA_DTC {
     bool  resetHigh;
     bool  strobeHigh;
 
+    // Set by parameterChanged for manual triggers, consumed in step()
+    bool  manualStart;
+    bool  manualStop;
+    bool  manualReset;
+    bool  manualStrobe;
+
     float phase;                 // 0..1 through current stage
     float stageDurationSeconds;
     float output;
@@ -132,6 +138,7 @@ struct _MiniMARFA_DTC {
         running = false;
         held = true;
         startGate = stopHigh = resetHigh = strobeHigh = false;
+        manualStart = manualStop = manualReset = manualStrobe = false;
 
         phase = 0.0f;
         stageDurationSeconds = 0.1f;
@@ -625,17 +632,11 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     auto *d = self->dtc;
     if (!d) return;
 
-    // Trigger params: fire on any change. Value stays at whatever the user
-    // set — they can turn it back to re-fire. No reset needed.
-    if (p == kParamManualStart)  { startAFG(self, d);  return; }
-    if (p == kParamManualStop)   { stopAFG(d);         return; }
-    if (p == kParamManualReset)  { resetAFG(self, d);  return; }
-    if (p == kParamManualStrobe) {
-        d->running = true;
-        d->held = false;
-        enterStage(self, d, nextStage(d));
-        return;
-    }
+    // Trigger params: set a flag in DTC, consumed safely in step()
+    if (p == kParamManualStart)  { d->manualStart  = true; return; }
+    if (p == kParamManualStop)   { d->manualStop   = true; return; }
+    if (p == kParamManualReset)  { d->manualReset  = true; return; }
+    if (p == kParamManualStrobe) { d->manualStrobe = true; return; }
 
     if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
         syncSelectedStageFromParams(self, p);
@@ -679,6 +680,16 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
     int apMode   = self->v[kParamAPOutMode];
 
     for (int n=0;n<numFrames;n++) {
+        // Manual triggers from parameterChanged (consumed once per block start)
+        if (n == 0) {
+            if (d->manualStart)  { d->manualStart  = false; startAFG(self, d); }
+            if (d->manualStop)   { d->manualStop   = false; stopAFG(d); }
+            if (d->manualReset)  { d->manualReset  = false; resetAFG(self, d); }
+            if (d->manualStrobe) { d->manualStrobe = false;
+                                   d->running = true; d->held = false;
+                                   enterStage(self, d, nextStage(d)); }
+        }
+
         // Inputs
         if (startIn) {
             bool edge = risingEdge(startIn[n], d->startGate);
@@ -778,10 +789,10 @@ static bool draw(_NT_algorithm *base) {
     if (!d) return false;
 
     const int W           = 256;
-    const int rowH        = 6;
-    const int rowsTop     = 64 - 7 * rowH;   // = 22
-    const int graphBottom = rowsTop - 3;      // = 19
-    const int graphTop    = 9;
+    const int graphTop    = 10;              // below NT parameter label (~8px)
+    const int graphBottom = 42;              // 32px for graph
+    const int rowH        = 3;              // tiny font is 3px tall, no gap needed
+    const int rowsTop     = graphBottom + 7; // 5px more gap below graph
 
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
@@ -804,27 +815,36 @@ static bool draw(_NT_algorithm *base) {
     int cx = mapX(curStart + (int)roundf((float)(curEnd - curStart) * clampf(d->phase, 0.0f, 1.0f)));
     NT_drawShapeI(kNT_line, cx, graphTop, cx, graphBottom, 15);
 
-    // Flag rows
-    static const char* rowLabels[7] = { "P1","P2","ST","SU","EN","F","L" };
-    const int dotsX0 = 14;
-    const int dotsW  = W - dotsX0;
+    // Flag display: 2 rows of equal-width columns, independent of stage time.
+    // Row 0: P1 P2 ST  |  Row 1: SU EN F L
+    // Each column is W/kStages wide. Active flags shown as filled sub-cells.
+    const int colW  = W / kStages;   // 32px per stage
+    const int rowH2 = 8;             // height of each flag row
+    const int row0y = rowsTop;
+    const int row1y = rowsTop + rowH2 + 1;
 
-    for (int r = 0; r < 7; r++) {
-        int y = rowsTop + r * rowH;
-        NT_drawText(0, y, rowLabels[r], 7, kNT_textLeft, kNT_textTiny);
-        for (int s = 0; s < kStages; s++) {
-            bool vals[7] = {
-                d->flags[s].pulse1, d->flags[s].pulse2, d->flags[s].stop,
-                d->flags[s].sust,   d->flags[s].enable, d->flags[s].first,
-                d->flags[s].last,
-            };
-            if (vals[r]) {
-                int sx = dotsX0 + (int)roundf((float)s / (float)(kStages) * (float)dotsW);
-                int dy = y - rowH;
-                NT_drawShapeI(kNT_rectangle, sx, dy, sx+2, dy+2, 15);
-            }
-        }
+    for (int s = 0; s < kStages; s++) {
+        int x = s * colW;
+        // Vertical divider between stages
+        NT_drawShapeI(kNT_line, x, row0y, x, row1y + rowH2, 5);
+
+        // Row 0: P1(left third) P2(mid third) ST(right third)
+        int t = colW / 3;
+        if (d->flags[s].pulse1) NT_drawShapeI(kNT_rectangle, x+1,   row0y+1, x+t-1,     row0y+rowH2-1, 15);
+        if (d->flags[s].pulse2) NT_drawShapeI(kNT_rectangle, x+t+1, row0y+1, x+2*t-1,   row0y+rowH2-1, 15);
+        if (d->flags[s].stop)   NT_drawShapeI(kNT_rectangle, x+2*t+1,row0y+1,x+colW-2,  row0y+rowH2-1, 15);
+
+        // Row 1: SU EN F L (quarters)
+        int q = colW / 4;
+        if (d->flags[s].sust)   NT_drawShapeI(kNT_rectangle, x+1,     row1y+1, x+q-1,     row1y+rowH2-1, 15);
+        if (d->flags[s].enable) NT_drawShapeI(kNT_rectangle, x+q+1,   row1y+1, x+2*q-1,   row1y+rowH2-1, 15);
+        if (d->flags[s].first)  NT_drawShapeI(kNT_rectangle, x+2*q+1, row1y+1, x+3*q-1,   row1y+rowH2-1, 15);
+        if (d->flags[s].last)   NT_drawShapeI(kNT_rectangle, x+3*q+1, row1y+1, x+colW-2,  row1y+rowH2-1, 15);
     }
+
+    // Row labels on far left (tiny, dim)
+    NT_drawText(0, row0y+1, "P", 5, kNT_textLeft, kNT_textTiny);
+    NT_drawText(0, row1y+1, "H", 5, kNT_textLeft, kNT_textTiny);
 
     return false;
 }
