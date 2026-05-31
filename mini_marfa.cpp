@@ -228,17 +228,17 @@ static const char* stageAddressStrings[]   = {"Internal", "Strobe Ext", "Cont Ex
 // ----------------------------
 static const _NT_parameter g_parameters[kNumParams] = {
     // Routing. Outputs use WITH_MODE to match the working Cessna pattern.
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Function CV", 1, 13)
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Time",        0, 0)
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Ref",         0, 0)
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 1",     0, 0)
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 2",     0, 0)
-    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("All Pulses",  0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Start",     0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Stop",      0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Reset",     0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Strobe",    0, 0)
-    NT_PARAMETER_AUDIO_INPUT("Stage Ext", 0, 0)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Function CV Out", 1, 13)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Time Out",        0, 0)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Ref Out",         0, 0)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 1 Out",     0, 0)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("Pulse 2 Out",     0, 0)
+    NT_PARAMETER_AUDIO_OUTPUT_WITH_MODE("All Pulses Out",  0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Start Input",     0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Stop Input",      0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Reset Input",     0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Strobe Input",    0, 0)
+    NT_PARAMETER_AUDIO_INPUT("Stage Ext Input", 0, 0)
 
     // CV levels — 0..1000 maps to selected voltage range.
     { .name="CV 1", .min=0,.max=1000,.def=0,   .unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
@@ -837,9 +837,18 @@ static bool draw(_NT_algorithm *base) {
     auto mapX = [&](int idx)->int {
         return (int)roundf(((float)idx / (float)(kDisplayPoints-1)) * (float)(W-1));
     };
+    // Determine display voltage range based on current setting
+    float vMin, vMax;
+    switch (self->v[kParamVoltageRange]) {
+        case 1: vMin = 0.0f; vMax = 5.0f;  break;  // 0-5V
+        case 2: vMin = 0.0f; vMax = 2.0f;  break;  // 0-2V
+        case 3: vMin =-5.0f; vMax = 5.0f;  break;  // +/-5V
+        default:vMin = 0.0f; vMax = 10.0f; break;  // 0-10V
+    }
+
     auto mapY = [&](float v)->int {
-        float vv = clampf(v, 0.0f, 10.0f);
-        return graphTop + (int)roundf((1.0f - vv / 10.0f) * (float)(graphBottom - graphTop));
+        float vv = clampf(v, vMin, vMax);
+        return graphTop + (int)roundf((1.0f - (vv - vMin) / (vMax - vMin)) * (float)(graphBottom - graphTop));
     };
 
     // Contour
@@ -863,8 +872,9 @@ static bool draw(_NT_algorithm *base) {
     const int row1y   = rowsTop + rowH2 + 1;
 
     // Legend: fixed labels on left of each row
-    NT_drawText(0, row0y + 5, "P1 P2 STP", 7, kNT_textLeft, kNT_textTiny);
-    NT_drawText(0, row1y + 5, "SUS ENA FST LST", 7, kNT_textLeft, kNT_textTiny);
+    int legendY = row0y - 4;
+    NT_drawText(0,   legendY, "P1 P2 STP", 7, kNT_textLeft, kNT_textTiny);
+    NT_drawText(128, legendY, "SUS ENA FST LST", 7, kNT_textLeft, kNT_textTiny);
 
     for (int s = 0; s < kStages; s++) {
         int x = s * colW;
