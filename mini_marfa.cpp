@@ -206,7 +206,7 @@ enum {
     kParamScale,
     kParamRootNote,
 };
-static constexpr int kNumParams = kParamPulseLength + 1;
+static constexpr int kNumParams = kParamRootNote + 1;
 static constexpr int kFlagsPerStage = 7;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last
 static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
                      kFlagSust  = 3, kFlagEnable = 4, kFlagFirst = 5, kFlagLast = 6;
@@ -832,7 +832,6 @@ static bool draw(_NT_algorithm *base) {
     const int W           = 256;
     const int graphTop    = 10;              // below NT parameter label (~8px)
     const int graphBottom = 42;              // 32px for graph
-    const int rowH        = 3;              // tiny font is 3px tall, no gap needed
     const int rowsTop     = graphBottom + 7; // 5px more gap below graph
 
     auto mapX = [&](int idx)->int {
