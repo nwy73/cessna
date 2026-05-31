@@ -203,6 +203,8 @@ enum {
     kParamVoltageRange,
     kParamStageAddress,
     kParamPulseLength,
+    kParamScale,
+    kParamRootNote,
 };
 static constexpr int kNumParams = kParamPulseLength + 1;
 static constexpr int kFlagsPerStage = 7;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last
@@ -216,7 +218,9 @@ static const char* onOffStrings[]          = {"Off", "On", nullptr};
 static const char* quantContStrings[]      = {"Quant", "Cont", nullptr};
 static const char* slopedSteppedStrings[]  = {"Sloped", "Stepped", nullptr};
 static const char* timeRangeStrings[]      = {".002-.03s", ".02-.3s", ".2-3s", "2-30s", nullptr};
-static const char* voltageRangeStrings[]   = {"0-10V", "0-5V", "+/-5V", nullptr};
+static const char* voltageRangeStrings[]   = {"0-10V", "0-5V", "0-2V", "+/-5V", nullptr};
+static const char* scaleStrings[]          = {"Off","Major","Minor","Pent Maj","Pent Min", nullptr};
+static const char* rootStrings[]           = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B", nullptr};
 static const char* stageAddressStrings[]   = {"Internal", "Strobe Ext", "Cont Ext", nullptr};
 
 // ----------------------------
@@ -280,9 +284,11 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
-    { .name="Voltage Range", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
+    { .name="Voltage Range", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
     { .name="Stage Address", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
     { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitMs,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Scale",         .min=0,.max=4,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=scaleStrings },
+    { .name="Root Note",     .min=0,.max=11,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=rootStrings },
 };
 
 // ----------------------------
@@ -354,6 +360,7 @@ static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStrobe,
     (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
+    (uint8_t)kParamScale,(uint8_t)kParamRootNote,
 };
 
 static const _NT_parameterPage g_pages_arr[] = {
@@ -390,19 +397,53 @@ static float cvLevelToVolts(_MiniMARFA *self, int stage) {
     float u = clampf((float)raw / 1000.0f, 0.0f, 1.0f);
     switch (self->v[kParamVoltageRange]) {
         case 1: return u * 5.0f;           // 0-5V
-        case 2: return u * 10.0f - 5.0f;   // +/-5V, NT convenience only
+        case 2: return u * 2.0f;           // 0-2V: 1V/oct over 2 octaves
+        case 3: return u * 10.0f - 5.0f;   // +/-5V
         default:return u * 10.0f;          // 0-10V
     }
 }
 
-// Quantize according to voltage range:
-//   0-5V  → 1V/oct 12TET semitone grid (1/12 V steps) for pitch sequencing.
-//   0-10V → 0.1V steps (MARF original behaviour), suitable for modulation.
-//   +/-5V → 0.1V steps, suitable for bipolar modulation.
+// Scale intervals in semitones from root
+static const int kScaleMajor[]    = {0,2,4,5,7,9,11};
+static const int kScaleMinor[]    = {0,2,3,5,7,8,10};
+static const int kScalePentMaj[]  = {0,2,4,7,9};
+static const int kScalePentMin[]  = {0,3,5,7,10};
+static const int kScaleLens[]     = {7,7,5,5};
+static const int* kScales[]       = {kScaleMajor,kScaleMinor,kScalePentMaj,kScalePentMin};
+
+static float quantizeToScale(float v, int scaleIdx, int root) {
+    // Convert voltage to semitones (1V/oct)
+    float semitones = v * 12.0f;
+    int octave      = (int)floorf(semitones / 12.0f);
+    float semInOct  = semitones - octave * 12.0f;
+
+    // Find nearest scale degree relative to root
+    const int* scale = kScales[scaleIdx];
+    int len          = kScaleLens[scaleIdx];
+    int best         = 0;
+    float bestDist   = 999.0f;
+    for (int i = 0; i < len; i++) {
+        float deg  = fmodf((float)((scale[i] + root) % 12), 12.0f);
+        float dist = fabsf(semInOct - deg);
+        // Also check wrapping distance
+        if (dist > 6.0f) dist = 12.0f - dist;
+        if (dist < bestDist) { bestDist = dist; best = (scale[i] + root) % 12; }
+    }
+    return (float)(octave * 12 + best) / 12.0f;
+}
+
+// Quantize according to voltage range and scale settings.
+//   0-2V / 0-5V → 1V/oct pitch grid, with optional scale quantization
+//   0-10V / +/-5V → 0.1V steps (modulation), scale ignored
 static float quantizeForRange(_MiniMARFA *self, float v) {
-    if (self->v[kParamVoltageRange] == 1)        // 0-5V: pitch
-        return roundf(v * 12.0f) / 12.0f;
-    return roundf(v * 10.0f) * 0.1f;            // modulation ranges
+    int range = self->v[kParamVoltageRange];
+    if (range == 1 || range == 2) {  // pitch ranges
+        int scale = self->v[kParamScale];
+        if (scale > 0)
+            return quantizeToScale(v, scale - 1, self->v[kParamRootNote]);
+        return roundf(v * 12.0f) / 12.0f;  // chromatic
+    }
+    return roundf(v * 10.0f) * 0.1f;  // modulation
 }
 
 static float entryVoltage(_MiniMARFA *self, int stage) {
@@ -819,25 +860,12 @@ static bool draw(_NT_algorithm *base) {
     // Row 0: P1 P2 ST  |  Row 1: SU EN F L
     const int colW  = W / kStages;   // 32px per stage
     const int rowH2 = 8;
-    const int legendY = rowsTop - 4; // legend just above rows
     const int row0y   = rowsTop;
     const int row1y   = rowsTop + rowH2 + 1;
 
-    // Legend: P1 P2 ST above row 0, SU EN F L above row 1
-    // Draw once, positioned at left edge of their sub-cells in stage 0
-    {
-        int t = colW / 3;
-        int q = colW / 4;
-        NT_drawText(0,       legendY, "P1", 7, kNT_textLeft, kNT_textTiny);
-        NT_drawText(t,       legendY, "P2", 7, kNT_textLeft, kNT_textTiny);
-        NT_drawText(2*t,     legendY, "ST", 7, kNT_textLeft, kNT_textTiny);
-        // Row 1 labels on right half of legend line
-        int off = W/2;
-        NT_drawText(off,       legendY, "SU", 7, kNT_textLeft, kNT_textTiny);
-        NT_drawText(off+q,     legendY, "EN", 7, kNT_textLeft, kNT_textTiny);
-        NT_drawText(off+2*q,   legendY, "F",  7, kNT_textLeft, kNT_textTiny);
-        NT_drawText(off+3*q,   legendY, "L",  7, kNT_textLeft, kNT_textTiny);
-    }
+    // Legend: fixed labels on left of each row
+    NT_drawText(0, row0y + 5, "P1 P2 STP", 7, kNT_textLeft, kNT_textTiny);
+    NT_drawText(0, row1y + 5, "SUS ENA FST LST", 7, kNT_textLeft, kNT_textTiny);
 
     for (int s = 0; s < kStages; s++) {
         int x = s * colW;
