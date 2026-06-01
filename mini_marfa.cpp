@@ -852,7 +852,6 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             // Time multiplier: param is 1-200 representing 0.01x-2.0x
             // CV input adds 0-10V mapped to 0-1.0x additional multiplier
             float mult = (float)self->v[kParamTimeMult] / 100.0f;
-            float mult = (float)self->v[kParamTimeMult] / 100.0f;
             if (timeMultIn) mult += clampf(timeMultIn[n] / 10.0f, 0.0f, 1.0f);
             mult = clampf(mult, 0.01f, 4.0f);  // safety clamp
             float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate * mult);
