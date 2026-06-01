@@ -645,6 +645,8 @@ static void resetAllStages(_MiniMARFA *self, _MiniMARFA_DTC *d) {
     }
     resolveCycleForStage(d, d->currentStage);
 }
+
+static void syncSelectedStageFromParams(_MiniMARFA *self, int p) {
     // Called when any flag param changes.  Determine which stage changed
     // from the param index, then update that stage's flags in the DTC.
     auto *d = self->dtc;
