@@ -631,17 +631,9 @@ static void stopAFG(_MiniMARFA_DTC *d) {
     d->held = true;
 }
 
-static void resetAllStages(_MiniMARFA *self, _MiniMARFA_DTC *d) {
+static void resetAllStages(_MiniMARFA_DTC *d) {
     for (int s = 0; s < kStages; s++) {
-        int base = kParamS1Pulse1 + s * kFlagsPerStage;
-        d->flags[s] = {};  // zero all flags
-        // Reset all stage params to default via NT API
-        uint32_t idx = NT_algorithmIndex(self);
-        uint32_t off = NT_parameterOffset();
-        for (int f = 0; f < kFlagsPerStage; f++) {
-            int def = (f == kFlagCurve) ? 0 : 0;  // all defaults are 0
-            NT_setParameterFromUi(idx, (uint32_t)(base + f) + off, def);
-        }
+        d->flags[s] = {};
     }
     resolveCycleForStage(d, d->currentStage);
 }
@@ -721,7 +713,7 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     if (p == kParamManualStop)   { d->manualStop   = true; return; }
     if (p == kParamManualReset)  { d->manualReset  = true; return; }
     if (p == kParamManualStrobe) { d->manualStrobe = true; return; }
-    if (p == kParamResetAll)     { resetAllStages(self, d); return; }
+    if (p == kParamResetAll)     { resetAllStages(d); return; }
 
     if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
         syncSelectedStageFromParams(self, p);
