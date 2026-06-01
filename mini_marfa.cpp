@@ -628,16 +628,6 @@ static void stopAFG(_MiniMARFA_DTC *d) {
     d->held = true;
 }
 
-static void syncParamsFromSelectedStage(_MiniMARFA *self) {
-    // The NT API does not provide a way to push parameter values back to the
-    // UI from inside parameterChanged (NT_setParameterValue does not exist).
-    // Instead, the flag params (P1/P2/STOP/SUST/ENABLE/FIRST/LAST) in v[]
-    // always reflect the most recently *edited* stage, not necessarily the
-    // currently *selected* stage.  The draw() function shows the active stage's
-    // flags directly from the DTC so the display is always accurate.
-    (void)self;
-}
-
 static void syncSelectedStageFromParams(_MiniMARFA *self, int p) {
     // Called when any flag param changes.  Determine which stage changed
     // from the param index, then update that stage's flags in the DTC.
@@ -747,6 +737,8 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
     float *resetIn  = busPtr(busFrames, self->v[kParamResetIn],  numFrames);
     float *strobeIn = busPtr(busFrames, self->v[kParamStrobeIn], numFrames);
     float *sextIn   = busPtr(busFrames, self->v[kParamSExtIn],   numFrames);
+    float *timeMultIn = busPtr(busFrames, self->v[kParamTimeMultIn], numFrames);
+    float *extCVIn    = busPtr(busFrames, self->v[kParamExtCVIn],   numFrames);
 
     int voutMode = self->v[kParamVOutMode];
     int toutMode = self->v[kParamTOutMode];
@@ -860,8 +852,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             // Time multiplier: param is 1-200 representing 0.01x-2.0x
             // CV input adds 0-10V mapped to 0-1.0x additional multiplier
             float mult = (float)self->v[kParamTimeMult] / 100.0f;
-            float *timeMultIn = busPtr(busFrames, self->v[kParamTimeMultIn], numFrames);
-    float *extCVIn    = busPtr(busFrames, self->v[kParamExtCVIn],   numFrames);
+            float mult = (float)self->v[kParamTimeMult] / 100.0f;
             if (timeMultIn) mult += clampf(timeMultIn[n] / 10.0f, 0.0f, 1.0f);
             mult = clampf(mult, 0.01f, 4.0f);  // safety clamp
             float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate * mult);
