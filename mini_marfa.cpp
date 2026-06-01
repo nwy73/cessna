@@ -197,6 +197,7 @@ enum {
     kParamManualStop,
     kParamManualReset,
     kParamManualStrobe,
+    kParamResetAll,
     kParamQuantCont,
     kParamTimeRange,
     kParamVoltageRange,
@@ -209,11 +210,11 @@ enum {
     kParamExtCVIn,
 };
 static constexpr int kNumParams = kParamExtCVIn + 1;
-static constexpr int kFlagsPerStage = 11;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last, Shape, VExt, Octave, Slope
+static constexpr int kFlagsPerStage = 11;
 static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop  = 2,
                      kFlagSust   = 3, kFlagEnable = 4, kFlagFirst = 5,
-                     kFlagLast   = 6, kFlagCurve  = 7, kFlagVExt  = 8,
-                     kFlagOctave = 9, kFlagSlope  = 10;
+                     kFlagLast   = 6, kFlagCurve  = 7, kFlagSlope = 8,
+                     kFlagVExt   = 9, kFlagOctave = 10;
 
 // ----------------------------
 // String tables
@@ -275,9 +276,9 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr }, \
+    { .name="Slope",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="V.Ext",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
-    { .name="Octave", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=octaveStrings }, \
-    { .name="Slope",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
+    { .name="Octave", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=octaveStrings },
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
 #undef STAGE_FLAGS
@@ -285,10 +286,11 @@ static const _NT_parameter g_parameters[kNumParams] = {
 
     // Global — manual trigger buttons.
     // min=-1/max=1/def=0: encoder can always move either direction, fires every time.
-    { .name="Start",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Stop",   .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Reset",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Strobe", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Start",      .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Stop",       .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Reset",      .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Strobe",     .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Reset All",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
@@ -376,6 +378,7 @@ static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStop,
     (uint8_t)kParamManualReset,
     (uint8_t)kParamManualStrobe,
+    (uint8_t)kParamResetAll,
     (uint8_t)kParamQuantCont,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
     (uint8_t)kParamScale,(uint8_t)kParamRootNote,
@@ -628,7 +631,20 @@ static void stopAFG(_MiniMARFA_DTC *d) {
     d->held = true;
 }
 
-static void syncSelectedStageFromParams(_MiniMARFA *self, int p) {
+static void resetAllStages(_MiniMARFA *self, _MiniMARFA_DTC *d) {
+    for (int s = 0; s < kStages; s++) {
+        int base = kParamS1Pulse1 + s * kFlagsPerStage;
+        d->flags[s] = {};  // zero all flags
+        // Reset all stage params to default via NT API
+        uint32_t idx = NT_algorithmIndex(self);
+        uint32_t off = NT_parameterOffset();
+        for (int f = 0; f < kFlagsPerStage; f++) {
+            int def = (f == kFlagCurve) ? 0 : 0;  // all defaults are 0
+            NT_setParameterFromUi(idx, (uint32_t)(base + f) + off, def);
+        }
+    }
+    resolveCycleForStage(d, d->currentStage);
+}
     // Called when any flag param changes.  Determine which stage changed
     // from the param index, then update that stage's flags in the DTC.
     auto *d = self->dtc;
@@ -703,6 +719,7 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     if (p == kParamManualStop)   { d->manualStop   = true; return; }
     if (p == kParamManualReset)  { d->manualReset  = true; return; }
     if (p == kParamManualStrobe) { d->manualStrobe = true; return; }
+    if (p == kParamResetAll)     { resetAllStages(self, d); return; }
 
     if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
         syncSelectedStageFromParams(self, p);
@@ -854,7 +871,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             float mult = (float)self->v[kParamTimeMult] / 100.0f;
             if (timeMultIn) mult += clampf(timeMultIn[n] / 10.0f, 0.0f, 1.0f);
             mult = clampf(mult, 0.01f, 4.0f);  // safety clamp
-            float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate * mult);
+            float inc = mult / (d->stageDurationSeconds * d->sampleRate);
             d->phase += inc;
             if (d->phase >= 1.0f)
                 enterStage(self, d, nextStage(d), extCV);
@@ -916,8 +933,8 @@ static bool draw(_NT_algorithm *base) {
 
     // Legend: fixed labels on left of each row
     int legendY = row0y - 4;
-    NT_drawText(0,   legendY, "P1 P2 STP", 7, kNT_textLeft, kNT_textTiny);
-    NT_drawText(128, legendY, "SUS ENA FST LST", 7, kNT_textLeft, kNT_textTiny);
+    NT_drawText(0,   legendY, "Row1: P1 P2 STP", 7, kNT_textLeft,  kNT_textTiny);
+    NT_drawText(255, legendY, "Row2: SUS ENA FST LST", 7, kNT_textRight, kNT_textTiny);
 
     for (int s = 0; s < kStages; s++) {
         int x = s * colW;
