@@ -190,7 +190,7 @@ enum {
     // Per-stage program pages (8 stages × 7 flags = 56 params)
     // All 56 params are contiguous: kParamS1Pulse1 + stage*kFlagsPerStage + kFlagXxx
     kParamS1Pulse1,
-    kParamS8Last   = kParamS1Pulse1 + 8*7 - 1,
+    kParamS8Last   = kParamS1Pulse1 + 8*8 - 1,
 
     // Global page — starts immediately after the 56 stage flag params
     kParamManualStart  = kParamS8Last + 1,
@@ -205,11 +205,14 @@ enum {
     kParamPulseLength,
     kParamScale,
     kParamRootNote,
+    kParamTimeMult,
+    kParamTimeMultIn,
 };
-static constexpr int kNumParams = kParamRootNote + 1;
-static constexpr int kFlagsPerStage = 7;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last
+static constexpr int kNumParams = kParamTimeMultIn + 1;
+static constexpr int kFlagsPerStage = 8;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last, Curve
 static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
-                     kFlagSust  = 3, kFlagEnable = 4, kFlagFirst = 5, kFlagLast = 6;
+                     kFlagSust  = 3, kFlagEnable = 4, kFlagFirst = 5,
+                     kFlagLast  = 6, kFlagCurve  = 7;
 
 // ----------------------------
 // String tables
@@ -269,7 +272,8 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Sust",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Enable", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
-    { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
+    { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
 #undef STAGE_FLAGS
@@ -289,6 +293,8 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitMs,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Scale",         .min=0,.max=4,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=scaleStrings },
     { .name="Root Note",     .min=0,.max=11,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=rootStrings },
+    { .name="Time Mult",     .min=1,.max=200,.def=100,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    NT_PARAMETER_CV_INPUT("Time Mult In", 0, 0)
 };
 
 // ----------------------------
@@ -303,7 +309,7 @@ static const uint8_t g_pageRoutingIdx[] = {
     (uint8_t)kParamAPOut,(uint8_t)kParamAPOutMode,
     (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,
     (uint8_t)kParamResetIn,(uint8_t)kParamStrobeIn,
-    (uint8_t)kParamSExtIn,
+    (uint8_t)kParamSExtIn,(uint8_t)kParamTimeMultIn,
 };
 static const uint8_t g_pageCVIdx[] = {
     (uint8_t)(kParamCV1+0),(uint8_t)(kParamCV1+1),(uint8_t)(kParamCV1+2),(uint8_t)(kParamCV1+3),
@@ -316,42 +322,42 @@ static const uint8_t g_pageTimeIdx[] = {
 static const uint8_t g_pageStage1Idx[] = {
     (uint8_t)(kParamS1Pulse1+0),(uint8_t)(kParamS1Pulse1+1),(uint8_t)(kParamS1Pulse1+2),
     (uint8_t)(kParamS1Pulse1+3),(uint8_t)(kParamS1Pulse1+4),(uint8_t)(kParamS1Pulse1+5),
-    (uint8_t)(kParamS1Pulse1+6),
+    (uint8_t)(kParamS1Pulse1+6),(uint8_t)(kParamS1Pulse1+7),
 };
 static const uint8_t g_pageStage2Idx[] = {
-    (uint8_t)(kParamS1Pulse1+7),(uint8_t)(kParamS1Pulse1+8),(uint8_t)(kParamS1Pulse1+9),
-    (uint8_t)(kParamS1Pulse1+10),(uint8_t)(kParamS1Pulse1+11),(uint8_t)(kParamS1Pulse1+12),
-    (uint8_t)(kParamS1Pulse1+13),
+    (uint8_t)(kParamS1Pulse1+8),(uint8_t)(kParamS1Pulse1+9),(uint8_t)(kParamS1Pulse1+10),
+    (uint8_t)(kParamS1Pulse1+11),(uint8_t)(kParamS1Pulse1+12),(uint8_t)(kParamS1Pulse1+13),
+    (uint8_t)(kParamS1Pulse1+14),(uint8_t)(kParamS1Pulse1+15),
 };
 static const uint8_t g_pageStage3Idx[] = {
-    (uint8_t)(kParamS1Pulse1+14),(uint8_t)(kParamS1Pulse1+15),(uint8_t)(kParamS1Pulse1+16),
-    (uint8_t)(kParamS1Pulse1+17),(uint8_t)(kParamS1Pulse1+18),(uint8_t)(kParamS1Pulse1+19),
-    (uint8_t)(kParamS1Pulse1+20),
+    (uint8_t)(kParamS1Pulse1+16),(uint8_t)(kParamS1Pulse1+17),(uint8_t)(kParamS1Pulse1+18),
+    (uint8_t)(kParamS1Pulse1+19),(uint8_t)(kParamS1Pulse1+20),(uint8_t)(kParamS1Pulse1+21),
+    (uint8_t)(kParamS1Pulse1+22),(uint8_t)(kParamS1Pulse1+23),
 };
 static const uint8_t g_pageStage4Idx[] = {
-    (uint8_t)(kParamS1Pulse1+21),(uint8_t)(kParamS1Pulse1+22),(uint8_t)(kParamS1Pulse1+23),
     (uint8_t)(kParamS1Pulse1+24),(uint8_t)(kParamS1Pulse1+25),(uint8_t)(kParamS1Pulse1+26),
-    (uint8_t)(kParamS1Pulse1+27),
+    (uint8_t)(kParamS1Pulse1+27),(uint8_t)(kParamS1Pulse1+28),(uint8_t)(kParamS1Pulse1+29),
+    (uint8_t)(kParamS1Pulse1+30),(uint8_t)(kParamS1Pulse1+31),
 };
 static const uint8_t g_pageStage5Idx[] = {
-    (uint8_t)(kParamS1Pulse1+28),(uint8_t)(kParamS1Pulse1+29),(uint8_t)(kParamS1Pulse1+30),
-    (uint8_t)(kParamS1Pulse1+31),(uint8_t)(kParamS1Pulse1+32),(uint8_t)(kParamS1Pulse1+33),
-    (uint8_t)(kParamS1Pulse1+34),
+    (uint8_t)(kParamS1Pulse1+32),(uint8_t)(kParamS1Pulse1+33),(uint8_t)(kParamS1Pulse1+34),
+    (uint8_t)(kParamS1Pulse1+35),(uint8_t)(kParamS1Pulse1+36),(uint8_t)(kParamS1Pulse1+37),
+    (uint8_t)(kParamS1Pulse1+38),(uint8_t)(kParamS1Pulse1+39),
 };
 static const uint8_t g_pageStage6Idx[] = {
-    (uint8_t)(kParamS1Pulse1+35),(uint8_t)(kParamS1Pulse1+36),(uint8_t)(kParamS1Pulse1+37),
-    (uint8_t)(kParamS1Pulse1+38),(uint8_t)(kParamS1Pulse1+39),(uint8_t)(kParamS1Pulse1+40),
-    (uint8_t)(kParamS1Pulse1+41),
+    (uint8_t)(kParamS1Pulse1+40),(uint8_t)(kParamS1Pulse1+41),(uint8_t)(kParamS1Pulse1+42),
+    (uint8_t)(kParamS1Pulse1+43),(uint8_t)(kParamS1Pulse1+44),(uint8_t)(kParamS1Pulse1+45),
+    (uint8_t)(kParamS1Pulse1+46),(uint8_t)(kParamS1Pulse1+47),
 };
 static const uint8_t g_pageStage7Idx[] = {
-    (uint8_t)(kParamS1Pulse1+42),(uint8_t)(kParamS1Pulse1+43),(uint8_t)(kParamS1Pulse1+44),
-    (uint8_t)(kParamS1Pulse1+45),(uint8_t)(kParamS1Pulse1+46),(uint8_t)(kParamS1Pulse1+47),
-    (uint8_t)(kParamS1Pulse1+48),
+    (uint8_t)(kParamS1Pulse1+48),(uint8_t)(kParamS1Pulse1+49),(uint8_t)(kParamS1Pulse1+50),
+    (uint8_t)(kParamS1Pulse1+51),(uint8_t)(kParamS1Pulse1+52),(uint8_t)(kParamS1Pulse1+53),
+    (uint8_t)(kParamS1Pulse1+54),(uint8_t)(kParamS1Pulse1+55),
 };
 static const uint8_t g_pageStage8Idx[] = {
-    (uint8_t)(kParamS1Pulse1+49),(uint8_t)(kParamS1Pulse1+50),(uint8_t)(kParamS1Pulse1+51),
-    (uint8_t)(kParamS1Pulse1+52),(uint8_t)(kParamS1Pulse1+53),(uint8_t)(kParamS1Pulse1+54),
-    (uint8_t)(kParamS1Pulse1+55),
+    (uint8_t)(kParamS1Pulse1+56),(uint8_t)(kParamS1Pulse1+57),(uint8_t)(kParamS1Pulse1+58),
+    (uint8_t)(kParamS1Pulse1+59),(uint8_t)(kParamS1Pulse1+60),(uint8_t)(kParamS1Pulse1+61),
+    (uint8_t)(kParamS1Pulse1+62),(uint8_t)(kParamS1Pulse1+63),
 };
 static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStart,
@@ -361,9 +367,11 @@ static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
     (uint8_t)kParamScale,(uint8_t)kParamRootNote,
+    (uint8_t)kParamTimeMult,
 };
 
 static const _NT_parameterPage g_pages_arr[] = {
+    { .name="Global",      .numParams=(uint8_t)ARRAY_SIZE(g_pageGlobalIdx), .group=0,.unused={0,0},.params=g_pageGlobalIdx },
     { .name="Routing",     .numParams=(uint8_t)ARRAY_SIZE(g_pageRoutingIdx),.group=0,.unused={0,0},.params=g_pageRoutingIdx },
     { .name="CV Levels",   .numParams=(uint8_t)ARRAY_SIZE(g_pageCVIdx),     .group=1,.unused={0,0},.params=g_pageCVIdx },
     { .name="Time Levels", .numParams=(uint8_t)ARRAY_SIZE(g_pageTimeIdx),   .group=1,.unused={0,0},.params=g_pageTimeIdx },
@@ -375,7 +383,6 @@ static const _NT_parameterPage g_pages_arr[] = {
     { .name="Stage 6",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage6Idx), .group=2,.unused={0,0},.params=g_pageStage6Idx },
     { .name="Stage 7",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage7Idx), .group=2,.unused={0,0},.params=g_pageStage7Idx },
     { .name="Stage 8",     .numParams=(uint8_t)ARRAY_SIZE(g_pageStage8Idx), .group=2,.unused={0,0},.params=g_pageStage8Idx },
-    { .name="Global",      .numParams=(uint8_t)ARRAY_SIZE(g_pageGlobalIdx), .group=0,.unused={0,0},.params=g_pageGlobalIdx },
 };
 static const _NT_parameterPages g_pages = {
     .numPages = ARRAY_SIZE(g_pages_arr),
@@ -652,13 +659,17 @@ static void updateDisplayData(_MiniMARFA *self, _MiniMARFA_DTC *d) {
 
     for (int i=0;i<kStages;i++) {
         float a = cvLevelToVolts(self, i);
-        // Last stage holds flat rather than interpolating back toward stage 0.
         float b = (i < kStages-1) ? cvLevelToVolts(self, i+1) : a;
         int x0 = xStage[i];
         int x1 = xStage[i+1];
         if (x1 <= x0) x1 = x0 + 1;
+        int shape = self->v[kParamS1Pulse1 + i * kFlagsPerStage + kFlagCurve];
         for (int x=x0; x<=x1 && x<kDisplayPoints; x++) {
             float t = (float)(x - x0) / (float)(x1 - x0);
+            if (shape != 0) {
+                float exponent = powf(3.0f, (float)shape / 100.0f);
+                t = powf(t, exponent);
+            }
             float v = (self->v[kParamSlopedStepped] == 1) ? a : lerpf(a, b, t);
             d->dispY[x] = v;
         }
@@ -777,6 +788,13 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             y = target;
         } else { // Sloped
             float t = clampf(d->phase, 0.0f, 1.0f);
+            // Apply per-stage shape (-100=log, 0=lin, +100=exp)
+            int curveParam = kParamS1Pulse1 + d->currentStage * kFlagsPerStage + kFlagCurve;
+            int shape = self->v[curveParam];
+            if (shape != 0) {
+                float exponent = powf(3.0f, (float)shape / 100.0f);
+                t = powf(t, exponent);
+            }
             y = lerpf(d->fromVoltage, target, t);
         }
         d->output = y;
@@ -811,7 +829,13 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
 
         // Internal timing
         if (d->running && !d->held) {
-            float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate);
+            // Time multiplier: param is 1-200 representing 0.01x-2.0x
+            // CV input adds 0-10V mapped to 0-1.0x additional multiplier
+            float mult = (float)self->v[kParamTimeMult] / 100.0f;
+            float *timeMultIn = busPtr(busFrames, self->v[kParamTimeMultIn], numFrames);
+            if (timeMultIn) mult += clampf(timeMultIn[n] / 10.0f, 0.0f, 1.0f);
+            mult = clampf(mult, 0.01f, 4.0f);  // safety clamp
+            float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate * mult);
             d->phase += inc;
             if (d->phase >= 1.0f)
                 enterStage(self, d, nextStage(d));
