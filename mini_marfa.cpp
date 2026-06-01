@@ -190,7 +190,7 @@ enum {
     // Per-stage program pages (8 stages × 7 flags = 56 params)
     // All 56 params are contiguous: kParamS1Pulse1 + stage*kFlagsPerStage + kFlagXxx
     kParamS1Pulse1,
-    kParamS8Last   = kParamS1Pulse1 + 8*8 - 1,
+    kParamS8Last   = kParamS1Pulse1 + 8*11 - 1,
 
     // Global page — starts immediately after the 56 stage flag params
     kParamManualStart  = kParamS8Last + 1,
@@ -198,7 +198,6 @@ enum {
     kParamManualReset,
     kParamManualStrobe,
     kParamQuantCont,
-    kParamSlopedStepped,
     kParamTimeRange,
     kParamVoltageRange,
     kParamStageAddress,
@@ -207,21 +206,23 @@ enum {
     kParamRootNote,
     kParamTimeMult,
     kParamTimeMultIn,
+    kParamExtCVIn,
 };
-static constexpr int kNumParams = kParamTimeMultIn + 1;
-static constexpr int kFlagsPerStage = 8;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last, Curve
-static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop = 2,
-                     kFlagSust  = 3, kFlagEnable = 4, kFlagFirst = 5,
-                     kFlagLast  = 6, kFlagCurve  = 7;
+static constexpr int kNumParams = kParamExtCVIn + 1;
+static constexpr int kFlagsPerStage = 11;  // Pulse1, Pulse2, Stop, Sust, Enable, First, Last, Shape, VExt, Octave, Slope
+static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop  = 2,
+                     kFlagSust   = 3, kFlagEnable = 4, kFlagFirst = 5,
+                     kFlagLast   = 6, kFlagCurve  = 7, kFlagVExt  = 8,
+                     kFlagOctave = 9, kFlagSlope  = 10;
 
 // ----------------------------
 // String tables
 // ----------------------------
 static const char* onOffStrings[]          = {"Off", "On", nullptr};
 static const char* quantContStrings[]      = {"Quant", "Cont", nullptr};
-static const char* slopedSteppedStrings[]  = {"Sloped", "Stepped", nullptr};
 static const char* timeRangeStrings[]      = {".002-.03s", ".02-.3s", ".2-3s", "2-30s", nullptr};
 static const char* voltageRangeStrings[]   = {"0-10V", "0-5V", "0-2V", "+/-5V", nullptr};
+static const char* octaveStrings[]         = {"+0", "+1", "+2", "+3", nullptr};
 static const char* scaleStrings[]          = {"Off","Major","Minor","Pent Maj","Pent Min", nullptr};
 static const char* rootStrings[]           = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B", nullptr};
 static const char* stageAddressStrings[]   = {"Internal", "Strobe Ext", "Cont Ext", nullptr};
@@ -273,7 +274,10 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Enable", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
-    { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr }, \
+    { .name="V.Ext",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Octave", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=octaveStrings }, \
+    { .name="Slope",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings },
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
 #undef STAGE_FLAGS
@@ -286,7 +290,6 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Reset",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Strobe", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
-    { .name="Sloped/Stepped",.min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=slopedSteppedStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
     { .name="Stage Address", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
@@ -295,6 +298,7 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Root Note",     .min=0,.max=11,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=rootStrings },
     { .name="Time Mult",     .min=1,.max=200,.def=100,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     NT_PARAMETER_CV_INPUT("Time Mult In", 0, 0)
+    NT_PARAMETER_CV_INPUT("Ext CV In",    0, 0)
 };
 
 // ----------------------------
@@ -309,7 +313,7 @@ static const uint8_t g_pageRoutingIdx[] = {
     (uint8_t)kParamAPOut,(uint8_t)kParamAPOutMode,
     (uint8_t)kParamStartIn,(uint8_t)kParamStopIn,
     (uint8_t)kParamResetIn,(uint8_t)kParamStrobeIn,
-    (uint8_t)kParamSExtIn,(uint8_t)kParamTimeMultIn,
+    (uint8_t)kParamSExtIn,(uint8_t)kParamTimeMultIn,(uint8_t)kParamExtCVIn,
 };
 static const uint8_t g_pageCVIdx[] = {
     (uint8_t)(kParamCV1+0),(uint8_t)(kParamCV1+1),(uint8_t)(kParamCV1+2),(uint8_t)(kParamCV1+3),
@@ -322,49 +326,57 @@ static const uint8_t g_pageTimeIdx[] = {
 static const uint8_t g_pageStage1Idx[] = {
     (uint8_t)(kParamS1Pulse1+0),(uint8_t)(kParamS1Pulse1+1),(uint8_t)(kParamS1Pulse1+2),
     (uint8_t)(kParamS1Pulse1+3),(uint8_t)(kParamS1Pulse1+4),(uint8_t)(kParamS1Pulse1+5),
-    (uint8_t)(kParamS1Pulse1+6),(uint8_t)(kParamS1Pulse1+7),
+    (uint8_t)(kParamS1Pulse1+6),(uint8_t)(kParamS1Pulse1+7),(uint8_t)(kParamS1Pulse1+8),
+    (uint8_t)(kParamS1Pulse1+9),(uint8_t)(kParamS1Pulse1+10),
 };
 static const uint8_t g_pageStage2Idx[] = {
-    (uint8_t)(kParamS1Pulse1+8),(uint8_t)(kParamS1Pulse1+9),(uint8_t)(kParamS1Pulse1+10),
     (uint8_t)(kParamS1Pulse1+11),(uint8_t)(kParamS1Pulse1+12),(uint8_t)(kParamS1Pulse1+13),
-    (uint8_t)(kParamS1Pulse1+14),(uint8_t)(kParamS1Pulse1+15),
+    (uint8_t)(kParamS1Pulse1+14),(uint8_t)(kParamS1Pulse1+15),(uint8_t)(kParamS1Pulse1+16),
+    (uint8_t)(kParamS1Pulse1+17),(uint8_t)(kParamS1Pulse1+18),(uint8_t)(kParamS1Pulse1+19),
+    (uint8_t)(kParamS1Pulse1+20),(uint8_t)(kParamS1Pulse1+21),
 };
 static const uint8_t g_pageStage3Idx[] = {
-    (uint8_t)(kParamS1Pulse1+16),(uint8_t)(kParamS1Pulse1+17),(uint8_t)(kParamS1Pulse1+18),
-    (uint8_t)(kParamS1Pulse1+19),(uint8_t)(kParamS1Pulse1+20),(uint8_t)(kParamS1Pulse1+21),
-    (uint8_t)(kParamS1Pulse1+22),(uint8_t)(kParamS1Pulse1+23),
+    (uint8_t)(kParamS1Pulse1+22),(uint8_t)(kParamS1Pulse1+23),(uint8_t)(kParamS1Pulse1+24),
+    (uint8_t)(kParamS1Pulse1+25),(uint8_t)(kParamS1Pulse1+26),(uint8_t)(kParamS1Pulse1+27),
+    (uint8_t)(kParamS1Pulse1+28),(uint8_t)(kParamS1Pulse1+29),(uint8_t)(kParamS1Pulse1+30),
+    (uint8_t)(kParamS1Pulse1+31),(uint8_t)(kParamS1Pulse1+32),
 };
 static const uint8_t g_pageStage4Idx[] = {
-    (uint8_t)(kParamS1Pulse1+24),(uint8_t)(kParamS1Pulse1+25),(uint8_t)(kParamS1Pulse1+26),
-    (uint8_t)(kParamS1Pulse1+27),(uint8_t)(kParamS1Pulse1+28),(uint8_t)(kParamS1Pulse1+29),
-    (uint8_t)(kParamS1Pulse1+30),(uint8_t)(kParamS1Pulse1+31),
+    (uint8_t)(kParamS1Pulse1+33),(uint8_t)(kParamS1Pulse1+34),(uint8_t)(kParamS1Pulse1+35),
+    (uint8_t)(kParamS1Pulse1+36),(uint8_t)(kParamS1Pulse1+37),(uint8_t)(kParamS1Pulse1+38),
+    (uint8_t)(kParamS1Pulse1+39),(uint8_t)(kParamS1Pulse1+40),(uint8_t)(kParamS1Pulse1+41),
+    (uint8_t)(kParamS1Pulse1+42),(uint8_t)(kParamS1Pulse1+43),
 };
 static const uint8_t g_pageStage5Idx[] = {
-    (uint8_t)(kParamS1Pulse1+32),(uint8_t)(kParamS1Pulse1+33),(uint8_t)(kParamS1Pulse1+34),
-    (uint8_t)(kParamS1Pulse1+35),(uint8_t)(kParamS1Pulse1+36),(uint8_t)(kParamS1Pulse1+37),
-    (uint8_t)(kParamS1Pulse1+38),(uint8_t)(kParamS1Pulse1+39),
+    (uint8_t)(kParamS1Pulse1+44),(uint8_t)(kParamS1Pulse1+45),(uint8_t)(kParamS1Pulse1+46),
+    (uint8_t)(kParamS1Pulse1+47),(uint8_t)(kParamS1Pulse1+48),(uint8_t)(kParamS1Pulse1+49),
+    (uint8_t)(kParamS1Pulse1+50),(uint8_t)(kParamS1Pulse1+51),(uint8_t)(kParamS1Pulse1+52),
+    (uint8_t)(kParamS1Pulse1+53),(uint8_t)(kParamS1Pulse1+54),
 };
 static const uint8_t g_pageStage6Idx[] = {
-    (uint8_t)(kParamS1Pulse1+40),(uint8_t)(kParamS1Pulse1+41),(uint8_t)(kParamS1Pulse1+42),
-    (uint8_t)(kParamS1Pulse1+43),(uint8_t)(kParamS1Pulse1+44),(uint8_t)(kParamS1Pulse1+45),
-    (uint8_t)(kParamS1Pulse1+46),(uint8_t)(kParamS1Pulse1+47),
+    (uint8_t)(kParamS1Pulse1+55),(uint8_t)(kParamS1Pulse1+56),(uint8_t)(kParamS1Pulse1+57),
+    (uint8_t)(kParamS1Pulse1+58),(uint8_t)(kParamS1Pulse1+59),(uint8_t)(kParamS1Pulse1+60),
+    (uint8_t)(kParamS1Pulse1+61),(uint8_t)(kParamS1Pulse1+62),(uint8_t)(kParamS1Pulse1+63),
+    (uint8_t)(kParamS1Pulse1+64),(uint8_t)(kParamS1Pulse1+65),
 };
 static const uint8_t g_pageStage7Idx[] = {
-    (uint8_t)(kParamS1Pulse1+48),(uint8_t)(kParamS1Pulse1+49),(uint8_t)(kParamS1Pulse1+50),
-    (uint8_t)(kParamS1Pulse1+51),(uint8_t)(kParamS1Pulse1+52),(uint8_t)(kParamS1Pulse1+53),
-    (uint8_t)(kParamS1Pulse1+54),(uint8_t)(kParamS1Pulse1+55),
+    (uint8_t)(kParamS1Pulse1+66),(uint8_t)(kParamS1Pulse1+67),(uint8_t)(kParamS1Pulse1+68),
+    (uint8_t)(kParamS1Pulse1+69),(uint8_t)(kParamS1Pulse1+70),(uint8_t)(kParamS1Pulse1+71),
+    (uint8_t)(kParamS1Pulse1+72),(uint8_t)(kParamS1Pulse1+73),(uint8_t)(kParamS1Pulse1+74),
+    (uint8_t)(kParamS1Pulse1+75),(uint8_t)(kParamS1Pulse1+76),
 };
 static const uint8_t g_pageStage8Idx[] = {
-    (uint8_t)(kParamS1Pulse1+56),(uint8_t)(kParamS1Pulse1+57),(uint8_t)(kParamS1Pulse1+58),
-    (uint8_t)(kParamS1Pulse1+59),(uint8_t)(kParamS1Pulse1+60),(uint8_t)(kParamS1Pulse1+61),
-    (uint8_t)(kParamS1Pulse1+62),(uint8_t)(kParamS1Pulse1+63),
+    (uint8_t)(kParamS1Pulse1+77),(uint8_t)(kParamS1Pulse1+78),(uint8_t)(kParamS1Pulse1+79),
+    (uint8_t)(kParamS1Pulse1+80),(uint8_t)(kParamS1Pulse1+81),(uint8_t)(kParamS1Pulse1+82),
+    (uint8_t)(kParamS1Pulse1+83),(uint8_t)(kParamS1Pulse1+84),(uint8_t)(kParamS1Pulse1+85),
+    (uint8_t)(kParamS1Pulse1+86),(uint8_t)(kParamS1Pulse1+87),
 };
 static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStart,
     (uint8_t)kParamManualStop,
     (uint8_t)kParamManualReset,
     (uint8_t)kParamManualStrobe,
-    (uint8_t)kParamQuantCont,(uint8_t)kParamSlopedStepped,(uint8_t)kParamTimeRange,
+    (uint8_t)kParamQuantCont,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
     (uint8_t)kParamScale,(uint8_t)kParamRootNote,
     (uint8_t)kParamTimeMult,
@@ -453,17 +465,29 @@ static float quantizeForRange(_MiniMARFA *self, float v) {
     return roundf(v * 10.0f) * 0.1f;  // modulation
 }
 
-static float entryVoltage(_MiniMARFA *self, int stage) {
-    float v = cvLevelToVolts(self, stage);
-    if (self->v[kParamQuantCont] == 0)           // Quant
+// Returns the base voltage for a stage, applying VEXT and octave offset.
+// extCV: current value of the Ext CV Input (pass 0.0f if not available at entry time).
+static float stageVoltage(_MiniMARFA *self, int stage, float extCV) {
+    int base = kParamS1Pulse1 + stage * kFlagsPerStage;
+    bool vext   = (self->v[base + kFlagVExt]   != 0);
+    int  octave =  self->v[base + kFlagOctave];
+    float v = vext ? extCV : cvLevelToVolts(self, stage);
+    v += (float)octave;  // add 1V per octave
+    return v;
+}
+
+static float entryVoltage(_MiniMARFA *self, int stage, float extCV) {
+    float v = stageVoltage(self, stage, extCV);
+    if (self->v[kParamQuantCont] == 0)
         v = quantizeForRange(self, v);
     return v;
 }
 
-static float liveVoltage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage) {
+static float liveVoltage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float extCV) {
     if (self->v[kParamQuantCont] == 0) // Quant: sampled at stage entry
         return d->sampledVoltage;
-    return cvLevelToVolts(self, stage);
+    float v = stageVoltage(self, stage, extCV);
+    return v;
 }
 
 static float timeLevelToSeconds(_MiniMARFA *self, int stage) {
@@ -539,7 +563,7 @@ static void fireEntryPulses(_MiniMARFA *self, _MiniMARFA_DTC *d) {
     d->allPulseRemaining = len;
 }
 
-static void enterStage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage) {
+static void enterStage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float extCV = 0.0f) {
     if (stage < 0) stage = 0;
     if (stage >= kStages) stage = kStages - 1;
 
@@ -550,12 +574,11 @@ static void enterStage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage) {
     d->phase = 0.0f;
     d->stageDurationSeconds = timeLevelToSeconds(self, stage);
     d->fromVoltage = d->output;
-    d->sampledVoltage = entryVoltage(self, stage);
+    d->sampledVoltage = entryVoltage(self, stage, extCV);
     d->targetVoltage = d->sampledVoltage;
 
     fireEntryPulses(self, d);
 
-    // Command flags are evaluated at stage entry.
     d->held = false;
     if (d->flags[stage].stop) {
         d->running = false;
@@ -663,14 +686,15 @@ static void updateDisplayData(_MiniMARFA *self, _MiniMARFA_DTC *d) {
         int x0 = xStage[i];
         int x1 = xStage[i+1];
         if (x1 <= x0) x1 = x0 + 1;
+        bool sloped = (self->v[kParamS1Pulse1 + i * kFlagsPerStage + kFlagSlope] != 0);
         int shape = self->v[kParamS1Pulse1 + i * kFlagsPerStage + kFlagCurve];
         for (int x=x0; x<=x1 && x<kDisplayPoints; x++) {
             float t = (float)(x - x0) / (float)(x1 - x0);
-            if (shape != 0) {
+            if (sloped && shape != 0) {
                 float exponent = powf(3.0f, (float)shape / 100.0f);
                 t = powf(t, exponent);
             }
-            float v = (self->v[kParamSlopedStepped] == 1) ? a : lerpf(a, b, t);
+            float v = sloped ? lerpf(a, b, t) : a;
             d->dispY[x] = v;
         }
     }
@@ -732,6 +756,8 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
     int apMode   = self->v[kParamAPOutMode];
 
     for (int n=0;n<numFrames;n++) {
+        float extCV = extCVIn ? extCVIn[n] : 0.0f;
+
         // Manual triggers from parameterChanged (consumed once per block start)
         if (n == 0) {
             if (d->manualStart)  { d->manualStart  = false; startAFG(self, d); }
@@ -739,7 +765,7 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             if (d->manualReset)  { d->manualReset  = false; resetAFG(self, d); }
             if (d->manualStrobe) { d->manualStrobe = false;
                                    d->running = true; d->held = false;
-                                   enterStage(self, d, nextStage(d)); }
+                                   enterStage(self, d, nextStage(d), extCV); }
         }
 
         // Inputs
@@ -756,19 +782,19 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
 
         if (strobeIn && risingEdge(strobeIn[n], d->strobeHigh)) {
             if (sextIn && self->v[kParamStageAddress] == 1) {
-                int target = addressedStageFromCV(sextIn[n]);
+                int tgt = addressedStageFromCV(sextIn[n]);
                 d->running = true;
                 d->held = false;
-                enterStage(self, d, target);
+                enterStage(self, d, tgt, extCV);
             }
         }
 
         if (sextIn && self->v[kParamStageAddress] == 2) {
-            int target = addressedStageFromCV(sextIn[n]);
-            if (target != d->currentStage) {
+            int tgt = addressedStageFromCV(sextIn[n]);
+            if (tgt != d->currentStage) {
                 d->running = true;
                 d->held = false;
-                enterStage(self, d, target);
+                enterStage(self, d, tgt, extCV);
             }
         }
 
@@ -782,14 +808,16 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
         }
 
         // Output value
-        float target = liveVoltage(self, d, d->currentStage);
+        float target = liveVoltage(self, d, d->currentStage, extCV);
         float y;
-        if (self->v[kParamSlopedStepped] == 1) { // Stepped
+        int stageBase = kParamS1Pulse1 + d->currentStage * kFlagsPerStage;
+        bool sloped = (self->v[stageBase + kFlagSlope] != 0);
+        if (!sloped) { // Stepped
             y = target;
         } else { // Sloped
             float t = clampf(d->phase, 0.0f, 1.0f);
             // Apply per-stage shape (-100=log, 0=lin, +100=exp)
-            int curveParam = kParamS1Pulse1 + d->currentStage * kFlagsPerStage + kFlagCurve;
+            int curveParam = stageBase + kFlagCurve;
             int shape = self->v[curveParam];
             if (shape != 0) {
                 float exponent = powf(3.0f, (float)shape / 100.0f);
@@ -833,12 +861,13 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             // CV input adds 0-10V mapped to 0-1.0x additional multiplier
             float mult = (float)self->v[kParamTimeMult] / 100.0f;
             float *timeMultIn = busPtr(busFrames, self->v[kParamTimeMultIn], numFrames);
+    float *extCVIn    = busPtr(busFrames, self->v[kParamExtCVIn],   numFrames);
             if (timeMultIn) mult += clampf(timeMultIn[n] / 10.0f, 0.0f, 1.0f);
             mult = clampf(mult, 0.01f, 4.0f);  // safety clamp
             float inc = 1.0f / (d->stageDurationSeconds * d->sampleRate * mult);
             d->phase += inc;
             if (d->phase >= 1.0f)
-                enterStage(self, d, nextStage(d));
+                enterStage(self, d, nextStage(d), extCV);
         }
     }
 
@@ -961,7 +990,7 @@ static _NT_algorithm* construct(const _NT_algorithmMemoryPtrs& ptrs,
 
     // Start halted at cycleFirst. A START pulse begins traversal.
     d->currentStage   = d->cycleFirst;
-    d->sampledVoltage = entryVoltage(self, d->cycleFirst);
+    d->sampledVoltage = entryVoltage(self, d->cycleFirst, 0.0f);
     d->targetVoltage  = d->sampledVoltage;
     d->output         = d->targetVoltage;
     d->fromVoltage    = d->output;
