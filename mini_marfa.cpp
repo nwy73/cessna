@@ -75,17 +75,22 @@ static inline bool risingEdge(float v, bool &oldHigh) {
 // Stage flags — order follows MARF panel/programming order
 // ----------------------------
 struct StageFlags {
-    bool pulse1;
-    bool pulse2;
-    bool stop;
-    bool sust;
-    bool enable;
-    bool first;
-    bool last;
+    bool  pulse1;
+    bool  pulse2;
+    bool  stop;
+    bool  sust;
+    bool  enable;
+    bool  first;
+    bool  last;
+    bool  slope;
+    bool  vext;
+    int   shape;   // -100 to +100
+    int   octave;  // 0-3
 
     StageFlags()
     : pulse1(false), pulse2(false), stop(false), sust(false),
-      enable(false), first(false), last(false) {}
+      enable(false), first(false), last(false),
+      slope(false), vext(false), shape(0), octave(0) {}
 };
 
 // ----------------------------
@@ -197,7 +202,7 @@ enum {
     kParamManualStop,
     kParamManualReset,
     kParamManualStrobe,
-    kParamResetAll,
+    kParamClearProg,
     kParamQuantCont,
     kParamTimeRange,
     kParamVoltageRange,
@@ -290,7 +295,7 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Stop",       .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Reset",      .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Strobe",     .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Reset All",  .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
+    { .name="Clear Prog", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
@@ -378,7 +383,7 @@ static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStop,
     (uint8_t)kParamManualReset,
     (uint8_t)kParamManualStrobe,
-    (uint8_t)kParamResetAll,
+    (uint8_t)kParamClearProg,
     (uint8_t)kParamQuantCont,(uint8_t)kParamTimeRange,
     (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
     (uint8_t)kParamScale,(uint8_t)kParamRootNote,
@@ -470,27 +475,25 @@ static float quantizeForRange(_MiniMARFA *self, float v) {
 
 // Returns the base voltage for a stage, applying VEXT and octave offset.
 // extCV: current value of the Ext CV Input (pass 0.0f if not available at entry time).
-static float stageVoltage(_MiniMARFA *self, int stage, float extCV) {
-    int base = kParamS1Pulse1 + stage * kFlagsPerStage;
-    bool vext   = (self->v[base + kFlagVExt]   != 0);
-    int  octave =  self->v[base + kFlagOctave];
+static float stageVoltage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float extCV) {
+    bool vext   = d->flags[stage].vext;
+    int  octave = d->flags[stage].octave;
     float v = vext ? extCV : cvLevelToVolts(self, stage);
-    v += (float)octave;  // add 1V per octave
+    v += (float)octave;
     return v;
 }
 
-static float entryVoltage(_MiniMARFA *self, int stage, float extCV) {
-    float v = stageVoltage(self, stage, extCV);
+static float entryVoltage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float extCV) {
+    float v = stageVoltage(self, d, stage, extCV);
     if (self->v[kParamQuantCont] == 0)
         v = quantizeForRange(self, v);
     return v;
 }
 
 static float liveVoltage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float extCV) {
-    if (self->v[kParamQuantCont] == 0) // Quant: sampled at stage entry
+    if (self->v[kParamQuantCont] == 0)
         return d->sampledVoltage;
-    float v = stageVoltage(self, stage, extCV);
-    return v;
+    return stageVoltage(self, d, stage, extCV);
 }
 
 static float timeLevelToSeconds(_MiniMARFA *self, int stage) {
@@ -577,7 +580,7 @@ static void enterStage(_MiniMARFA *self, _MiniMARFA_DTC *d, int stage, float ext
     d->phase = 0.0f;
     d->stageDurationSeconds = timeLevelToSeconds(self, stage);
     d->fromVoltage = d->output;
-    d->sampledVoltage = entryVoltage(self, stage, extCV);
+    d->sampledVoltage = entryVoltage(self, d, stage, extCV);
     d->targetVoltage = d->sampledVoltage;
 
     fireEntryPulses(self, d);
@@ -631,10 +634,9 @@ static void stopAFG(_MiniMARFA_DTC *d) {
     d->held = true;
 }
 
-static void resetAllStages(_MiniMARFA_DTC *d) {
-    for (int s = 0; s < kStages; s++) {
+static void clearProg(_MiniMARFA_DTC *d) {
+    for (int s = 0; s < kStages; s++)
         d->flags[s] = {};
-    }
     resolveCycleForStage(d, d->currentStage);
 }
 
@@ -654,6 +656,10 @@ static void syncSelectedStageFromParams(_MiniMARFA *self, int p) {
     d->flags[s].enable = (self->v[base + kFlagEnable] != 0);
     d->flags[s].first  = (self->v[base + kFlagFirst]  != 0);
     d->flags[s].last   = (self->v[base + kFlagLast]   != 0);
+    d->flags[s].shape  =  self->v[base + kFlagCurve];
+    d->flags[s].slope  = (self->v[base + kFlagSlope]  != 0);
+    d->flags[s].vext   = (self->v[base + kFlagVExt]   != 0);
+    d->flags[s].octave =  self->v[base + kFlagOctave];
     resolveCycleForStage(d, d->currentStage);
 }
 
@@ -686,8 +692,8 @@ static void updateDisplayData(_MiniMARFA *self, _MiniMARFA_DTC *d) {
         int x0 = xStage[i];
         int x1 = xStage[i+1];
         if (x1 <= x0) x1 = x0 + 1;
-        bool sloped = (self->v[kParamS1Pulse1 + i * kFlagsPerStage + kFlagSlope] != 0);
-        int shape = self->v[kParamS1Pulse1 + i * kFlagsPerStage + kFlagCurve];
+        bool sloped = d->flags[i].slope;
+        int shape   = d->flags[i].shape;
         for (int x=x0; x<=x1 && x<kDisplayPoints; x++) {
             float t = (float)(x - x0) / (float)(x1 - x0);
             if (sloped && shape != 0) {
@@ -713,7 +719,7 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     if (p == kParamManualStop)   { d->manualStop   = true; return; }
     if (p == kParamManualReset)  { d->manualReset  = true; return; }
     if (p == kParamManualStrobe) { d->manualStrobe = true; return; }
-    if (p == kParamResetAll)     { resetAllStages(d); return; }
+    if (p == kParamClearProg)    { clearProg(d); return; }
 
     if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
         syncSelectedStageFromParams(self, p);
@@ -813,15 +819,13 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
         // Output value
         float target = liveVoltage(self, d, d->currentStage, extCV);
         float y;
-        int stageBase = kParamS1Pulse1 + d->currentStage * kFlagsPerStage;
-        bool sloped = (self->v[stageBase + kFlagSlope] != 0);
+        bool sloped = d->flags[d->currentStage].slope;
         if (!sloped) { // Stepped
             y = target;
         } else { // Sloped
             float t = clampf(d->phase, 0.0f, 1.0f);
-            // Apply per-stage shape (-100=log, 0=lin, +100=exp)
-            int curveParam = stageBase + kFlagCurve;
-            int shape = self->v[curveParam];
+            // Apply per-stage shape from DTC (-100=log, 0=lin, +100=exp)
+            int shape = d->flags[d->currentStage].shape;
             if (shape != 0) {
                 float exponent = powf(3.0f, (float)shape / 100.0f);
                 t = powf(t, exponent);
@@ -986,12 +990,16 @@ static _NT_algorithm* construct(const _NT_algorithmMemoryPtrs& ptrs,
         d->flags[s].enable = (self->v[base + kFlagEnable] != 0);
         d->flags[s].first  = (self->v[base + kFlagFirst]  != 0);
         d->flags[s].last   = (self->v[base + kFlagLast]   != 0);
+        d->flags[s].shape  =  self->v[base + kFlagCurve];
+        d->flags[s].slope  = (self->v[base + kFlagSlope]  != 0);
+        d->flags[s].vext   = (self->v[base + kFlagVExt]   != 0);
+        d->flags[s].octave =  self->v[base + kFlagOctave];
     }
     resolveCycleForStage(d, 0);
 
     // Start halted at cycleFirst. A START pulse begins traversal.
     d->currentStage   = d->cycleFirst;
-    d->sampledVoltage = entryVoltage(self, d->cycleFirst, 0.0f);
+    d->sampledVoltage = entryVoltage(self, d, d->cycleFirst, 0.0f);
     d->targetVoltage  = d->sampledVoltage;
     d->output         = d->targetVoltage;
     d->fromVoltage    = d->output;
