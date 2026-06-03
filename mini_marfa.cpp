@@ -117,7 +117,6 @@ struct _MiniMARFA_DTC {
     bool  manualStart;
     bool  manualStop;
     bool  manualReset;
-    bool  manualStrobe;
 
     float phase;                 // 0..1 through current stage
     float stageDurationSeconds;
@@ -143,7 +142,7 @@ struct _MiniMARFA_DTC {
         running = false;
         held = true;
         startGate = stopHigh = resetHigh = strobeHigh = false;
-        manualStart = manualStop = manualReset = manualStrobe = false;
+        manualStart = manualStop = manualReset = false;
 
         phase = 0.0f;
         stageDurationSeconds = 0.1f;
@@ -201,7 +200,6 @@ enum {
     kParamManualStart  = kParamS8Last + 1,
     kParamManualStop,
     kParamManualReset,
-    kParamManualStrobe,
     kParamClearProg,
     kParamQuantCont,
     kParamTimeRange,
@@ -213,12 +211,13 @@ enum {
     kParamTimeMult,
     kParamTimeMultIn,
     kParamExtCVIn,
+    kParamSExtScale,
 };
-static constexpr int kNumParams = kParamExtCVIn + 1;
+static constexpr int kNumParams = kParamSExtScale + 1;
 static constexpr int kFlagsPerStage = 11;
 static constexpr int kFlagPulse1 = 0, kFlagPulse2 = 1, kFlagStop  = 2,
                      kFlagSust   = 3, kFlagEnable = 4, kFlagFirst = 5,
-                     kFlagLast   = 6, kFlagCurve  = 7, kFlagSlope = 8,
+                     kFlagLast   = 6, kFlagSlope  = 7, kFlagCurve = 8,
                      kFlagVExt   = 9, kFlagOctave = 10;
 
 // ----------------------------
@@ -280,8 +279,8 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Enable", .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="First",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Last",   .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
-    { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr }, \
     { .name="Slope",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
+    { .name="Shape",  .min=-100,.max=100,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr }, \
     { .name="V.Ext",  .min=0,.max=1,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=onOffStrings }, \
     { .name="Octave", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=octaveStrings },
     STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS STAGE_FLAGS
@@ -294,18 +293,18 @@ static const _NT_parameter g_parameters[kNumParams] = {
     { .name="Start",      .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Stop",       .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Reset",      .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
-    { .name="Strobe",     .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Clear Prog", .min=-1,.max=1,.def=0,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Quant/Cont",    .min=0,.max=1,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=quantContStrings },
     { .name="Time Range",    .min=0,.max=3,.def=1,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=timeRangeStrings },
     { .name="Voltage Range", .min=0,.max=3,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=voltageRangeStrings },
-    { .name="Stage Address", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
+    { .name="Address Mode", .min=0,.max=2,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=stageAddressStrings },
     { .name="Pulse ms",      .min=1,.max=100,.def=1,.unit=kNT_unitMs,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     { .name="Scale",         .min=0,.max=4,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=scaleStrings },
     { .name="Root Note",     .min=0,.max=11,.def=0,.unit=kNT_unitEnum,.scaling=kNT_scalingNone,.enumStrings=rootStrings },
     { .name="Time Mult",     .min=1,.max=200,.def=100,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
     NT_PARAMETER_CV_INPUT("Time Mult In", 0, 0)
     NT_PARAMETER_CV_INPUT("Ext CV In",    0, 0)
+    { .name="Stage Ext Scale", .min=50,.max=200,.def=100,.unit=kNT_unitNone,.scaling=kNT_scalingNone,.enumStrings=nullptr },
 };
 
 // ----------------------------
@@ -382,10 +381,10 @@ static const uint8_t g_pageGlobalIdx[] = {
     (uint8_t)kParamManualStart,
     (uint8_t)kParamManualStop,
     (uint8_t)kParamManualReset,
-    (uint8_t)kParamManualStrobe,
     (uint8_t)kParamClearProg,
     (uint8_t)kParamQuantCont,(uint8_t)kParamTimeRange,
-    (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamPulseLength,
+    (uint8_t)kParamVoltageRange,(uint8_t)kParamStageAddress,(uint8_t)kParamSExtScale,
+    (uint8_t)kParamPulseLength,
     (uint8_t)kParamScale,(uint8_t)kParamRootNote,
     (uint8_t)kParamTimeMult,
 };
@@ -718,7 +717,6 @@ static void parameterChanged(_NT_algorithm *base, int p) {
     if (p == kParamManualStart)  { d->manualStart  = true; return; }
     if (p == kParamManualStop)   { d->manualStop   = true; return; }
     if (p == kParamManualReset)  { d->manualReset  = true; return; }
-    if (p == kParamManualStrobe) { d->manualStrobe = true; return; }
     if (p == kParamClearProg)    { clearProg(d); return; }
 
     if (p >= kParamS1Pulse1 && p <= (int)kParamS8Last) {
@@ -772,9 +770,6 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
             if (d->manualStart)  { d->manualStart  = false; startAFG(self, d); }
             if (d->manualStop)   { d->manualStop   = false; stopAFG(d); }
             if (d->manualReset)  { d->manualReset  = false; resetAFG(self, d); }
-            if (d->manualStrobe) { d->manualStrobe = false;
-                                   d->running = true; d->held = false;
-                                   enterStage(self, d, nextStage(d), extCV); }
         }
 
         // Inputs
@@ -791,7 +786,8 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
 
         if (strobeIn && risingEdge(strobeIn[n], d->strobeHigh)) {
             if (sextIn && self->v[kParamStageAddress] == 1) {
-                int tgt = addressedStageFromCV(sextIn[n]);
+                float sextV = sextIn[n] * ((float)self->v[kParamSExtScale] / 100.0f);
+                int tgt = addressedStageFromCV(sextV);
                 d->running = true;
                 d->held = false;
                 enterStage(self, d, tgt, extCV);
@@ -799,7 +795,8 @@ static void step(_NT_algorithm *base, float *busFrames, int numFramesBy4) {
         }
 
         if (sextIn && self->v[kParamStageAddress] == 2) {
-            int tgt = addressedStageFromCV(sextIn[n]);
+            float sextV = sextIn[n] * ((float)self->v[kParamSExtScale] / 100.0f);
+            int tgt = addressedStageFromCV(sextV);
             if (tgt != d->currentStage) {
                 d->running = true;
                 d->held = false;
@@ -930,7 +927,7 @@ static bool draw(_NT_algorithm *base) {
     const int row1y   = rowsTop + rowH2 + 1;
 
     // Legend: fixed labels on left of each row
-    int legendY = row0y - 4;
+    int legendY = row0y - 1;
     NT_drawText(0,   legendY, "Row1: P1 P2 STP", 7, kNT_textLeft,  kNT_textTiny);
     NT_drawText(255, legendY, "Row2: SUS ENA FST LST", 7, kNT_textRight, kNT_textTiny);
 
